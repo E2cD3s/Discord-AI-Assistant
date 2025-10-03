@@ -165,7 +165,7 @@ def load_config(path: Path | str) -> AppConfig:
             min_silence_duration_ms=int(raw_config.get("stt", {}).get("min_silence_duration_ms", 500)),
         ),
         kokoro=KokoroConfig(
-            voice=raw_config.get("kokoro", {}).get("voice", "en_US-hfc_female-medium"),
+            voice=raw_config.get("kokoro", {}).get("voice", "af_heart"),
             speed=float(raw_config.get("kokoro", {}).get("speed", 1.0)),
             emotion=raw_config.get("kokoro", {}).get("emotion", "neutral"),
             output_dir=raw_config.get("kokoro", {}).get("output_dir", "tts_output"),

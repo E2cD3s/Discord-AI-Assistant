@@ -44,7 +44,7 @@ An offline-ready Discord bot that listens to voice, understands speech using Whi
 
    - **Ollama**: `ollama pull mistral` (or your preferred Hugging Face model)
    - **Faster-Whisper**: download the model directory into `models/faster-whisper-medium`
-   - **Kokoro**: follow the project instructions to place the pipeline weights in an accessible location
+   - **Kokoro**: follow the [Kokoro project](https://github.com/hexgrad/kokoro) instructions to place the pipeline weights in an accessible location. Reference the [VOICES.md table on Hugging Face](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md) for valid speaker IDs.
 
 4. Run the bot:
 

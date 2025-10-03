@@ -42,7 +42,7 @@ stt:
   min_silence_duration_ms: 500
 
 kokoro:
-  voice: "en_US-hfc_female-medium"
+  voice: "af_heart"  # Valid voice IDs: https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md
   speed: 1.0
   emotion: "neutral"
   output_dir: "tts_output"
