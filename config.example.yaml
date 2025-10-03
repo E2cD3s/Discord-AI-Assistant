@@ -1,0 +1,55 @@
+# Copy this file to config.yaml and adjust values for your environment.
+discord:
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  command_prefix: "!"
+  owner_ids: []  # Discord user IDs with elevated privileges
+  guild_ids: []  # Optional: limit slash commands to these guilds
+  status_rotation_seconds: 300
+  statuses:
+    - "Listening for the wake word"
+    - "Powered by Ollama + Kokoro"
+    - "Spinning up the local think tank"
+    - "Crunching bits in the batcave"
+  wake_word: "hey assistant"
+  wake_word_cooldown_seconds: 10
+  reply_in_thread: true
+
+conversation:
+  system_prompt: |
+    You are Echo, an offline AI assistant that helps members of this Discord server.
+    Be concise, friendly, and proactive about providing helpful information.
+  history_turns: 12
+  max_tokens: 512
+  temperature: 0.7
+  top_p: 0.9
+  presence_penalty: 0.0
+  frequency_penalty: 0.0
+
+ollama:
+  host: "http://localhost:11434"
+  model: "mistral"
+  request_timeout: 120
+  stream: true
+  keep_alive: 120
+
+stt:
+  model_path: "models/faster-whisper-medium"
+  device: "cuda"  # "cuda" or "cpu"
+  compute_type: "float16"
+  beam_size: 5
+  vad: true
+  energy_threshold: 0.5
+  min_silence_duration_ms: 500
+
+kokoro:
+  voice: "en_US-hfc_female-medium"
+  speed: 1.0
+  emotion: "neutral"
+  output_dir: "tts_output"
+  format: "wav"
+
+logging:
+  level: "INFO"
+  log_file: "logs/bot.log"
+  max_bytes: 1048576
+  backup_count: 5
