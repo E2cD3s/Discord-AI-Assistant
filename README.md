@@ -65,6 +65,14 @@ The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the pla
    python -m src.main --config config.yaml
    ```
 
+   On Linux and macOS you can optionally run `./run_assistant.sh` to launch the assistant. Pass `--setup` the first time to
+   automatically create the `.venv`, upgrade `pip`, and install `requirements.txt`, and use `--config <path>` to point at a
+   different configuration file when needed.
+
+   On Windows you can optionally double-click or execute the provided `run_assistant.bat` script, which activates the local
+   virtual environment (if present), accepts an optional `--config <path>`, and supports `--setup` to create the `.venv`,
+   upgrade `pip`, and install requirements before launching the assistant.
+
    At startup the assistant now performs a pre-flight check to confirm FFmpeg, the Opus codec, your Faster-Whisper model, and the
    Ollama endpoint are all available. Any missing dependency will raise a clear error before connecting to Discord.
 
