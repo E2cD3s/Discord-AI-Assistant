@@ -27,9 +27,10 @@ class VoiceSession:
         ctx: discord.ApplicationContext | discord.ext.commands.Context | discord.Interaction,
     ) -> discord.VoiceClient:
         author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
-        if not author or not author.voice or not author.voice.channel:
+        voice_state = getattr(author, "voice", None) if author else None
+        channel = getattr(voice_state, "channel", None) if voice_state else None
+        if channel is None:
             raise RuntimeError("User must be in a voice channel to summon the bot.")
-        channel = author.voice.channel
         voice_client = getattr(ctx, "voice_client", None)
         if voice_client is None:
             guild = getattr(ctx, "guild", None)

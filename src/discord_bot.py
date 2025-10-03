@@ -59,6 +59,7 @@ class DiscordAssistantBot(commands.Bot):
             await interaction.followup.send(reply)
 
         @self.tree.command(name="join", description="Summon the assistant to your current voice channel")
+        @app_commands.guild_only()
         async def join_voice(interaction: discord.Interaction) -> None:
             try:
                 voice_client = await self.voice_session.join(interaction)
