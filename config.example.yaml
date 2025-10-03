@@ -1,0 +1,13 @@
+# Example configuration for the Discord AI Assistant
+
+discord:
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  guild_ids:
+    - 123456789012345678
+  wake_words:
+    - "hey assistant"
+    - "ok assistant"
+  activity_text: "Listening for /ask"
+  # Slash commands are used by default. Command prefixes are optional and only
+  # required if you need legacy prefixed commands for compatibility.
+  command_prefix: null
