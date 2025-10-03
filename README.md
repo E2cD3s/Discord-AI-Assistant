@@ -65,6 +65,9 @@ The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the pla
    python -m src.main --config config.yaml
    ```
 
+   At startup the assistant now performs a pre-flight check to confirm FFmpeg, the Opus codec, your Faster-Whisper model, and the
+   Ollama endpoint are all available. Any missing dependency will raise a clear error before connecting to Discord.
+
 ## Commands
 
 | Command | Description |
