@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -97,18 +98,51 @@ class OllamaClient:
         _LOGGER.debug("Streaming Ollama request: %s", payload)
         async with session.post(url, json=payload) as response:
             response.raise_for_status()
-            async for line in response.content:
-                if not line:
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            text_buffer = ""
+            done = False
+
+            async for chunk_bytes in response.content:
+                if not chunk_bytes:
                     continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
-                    continue
-                if not chunk.get("done", False):
-                    content = chunk.get("message", {}).get("content")
+
+                text_buffer += decoder.decode(chunk_bytes)
+
+                while "\n" in text_buffer:
+                    line, text_buffer = text_buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        message_chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        # If decoding fails, prepend the data back to the buffer
+                        text_buffer = f"{line}\n{text_buffer}" if text_buffer else line
+                        break
+
+                    done = message_chunk.get("done", False)
+                    if not done:
+                        content = message_chunk.get("message", {}).get("content")
+                        if content:
+                            yield content
+                    if done:
+                        break
+
+                if done:
+                    break
+
+            if not done:
+                # Process any remaining buffered data after the stream ends.
+                text_buffer += decoder.decode(b"", final=True)
+                for line in filter(None, (segment.strip() for segment in text_buffer.split("\n"))):
+                    try:
+                        message_chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if message_chunk.get("done", False):
+                        break
+                    content = message_chunk.get("message", {}).get("content")
                     if content:
                         yield content
 
