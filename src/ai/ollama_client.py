@@ -33,6 +33,20 @@ class OllamaClient:
             if self._session and not self._session.closed:
                 await self._session.close()
 
+    async def ping(self) -> None:
+        """Ensure the Ollama server is reachable before attempting inference."""
+
+        session = await self._get_session()
+        url = f"{self._config.host.rstrip('/')}/api/version"
+        try:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                await response.text()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise RuntimeError(
+                f"Unable to reach Ollama at {self._config.host}. Check that the service is running."
+            ) from exc
+
     async def generate(
         self,
         messages: List[Dict[str, str]],
