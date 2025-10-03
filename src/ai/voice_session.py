@@ -22,20 +22,35 @@ class VoiceSession:
         self._tts = tts
         self._active_recordings: Dict[int, asyncio.Task[None]] = {}
 
-    async def join(self, ctx: discord.ApplicationContext | discord.ext.commands.Context) -> discord.VoiceClient:
-        if not ctx.author.voice or not ctx.author.voice.channel:
+    async def join(
+        self,
+        ctx: discord.ApplicationContext | discord.ext.commands.Context | discord.Interaction,
+    ) -> discord.VoiceClient:
+        author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
+        if not author or not author.voice or not author.voice.channel:
             raise RuntimeError("User must be in a voice channel to summon the bot.")
-        channel = ctx.author.voice.channel
-        if ctx.voice_client:
-            if ctx.voice_client.channel.id == channel.id:
-                return ctx.voice_client
-            await ctx.voice_client.move_to(channel)
-            return ctx.voice_client
+        channel = author.voice.channel
+        voice_client = getattr(ctx, "voice_client", None)
+        if voice_client is None:
+            guild = getattr(ctx, "guild", None)
+            voice_client = getattr(guild, "voice_client", None)
+        if voice_client:
+            if voice_client.channel.id == channel.id:
+                return voice_client
+            await voice_client.move_to(channel)
+            return voice_client
         return await channel.connect()
 
-    async def leave(self, ctx: discord.ApplicationContext | discord.ext.commands.Context) -> None:
-        if ctx.voice_client:
-            await ctx.voice_client.disconnect()
+    async def leave(
+        self,
+        ctx: discord.ApplicationContext | discord.ext.commands.Context | discord.Interaction,
+    ) -> None:
+        voice_client = getattr(ctx, "voice_client", None)
+        if voice_client is None:
+            guild = getattr(ctx, "guild", None)
+            voice_client = getattr(guild, "voice_client", None)
+        if voice_client:
+            await voice_client.disconnect()
 
     async def listen_once(
         self,

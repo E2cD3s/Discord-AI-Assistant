@@ -5,6 +5,7 @@ import time
 from typing import Dict, Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from .ai.conversation_manager import ConversationManager
@@ -45,64 +46,92 @@ class DiscordAssistantBot(commands.Bot):
             await self.tree.sync()
 
     def _register_commands(self) -> None:
-        @self.command(name="reset")
-        async def reset_conversation(ctx: commands.Context) -> None:
-            await self.conversation_manager.reset(ctx.channel.id)
-            await ctx.reply("Conversation history cleared for this channel.")
+        @self.tree.command(name="reset", description="Clear the assistant conversation history for this channel")
+        async def reset_conversation(interaction: discord.Interaction) -> None:
+            await self.conversation_manager.reset(interaction.channel_id)
+            await interaction.response.send_message("Conversation history cleared for this channel.")
 
-        @self.command(name="ask")
-        async def ask(ctx: commands.Context, *, question: str) -> None:
-            reply = await self.conversation_manager.generate_reply(ctx.channel.id, question)
-            await ctx.reply(reply, mention_author=False)
+        @self.tree.command(name="ask", description="Ask the assistant a question")
+        @app_commands.describe(question="The question you want to ask the assistant")
+        async def ask(interaction: discord.Interaction, question: str) -> None:
+            await interaction.response.defer(thinking=True)
+            reply = await self.conversation_manager.generate_reply(interaction.channel_id, question)
+            await interaction.followup.send(reply)
 
-        @self.command(name="join")
-        async def join_voice(ctx: commands.Context) -> None:
+        @self.tree.command(name="join", description="Summon the assistant to your current voice channel")
+        async def join_voice(interaction: discord.Interaction) -> None:
             try:
-                voice_client = await self.voice_session.join(ctx)
+                voice_client = await self.voice_session.join(interaction)
             except RuntimeError as exc:
-                await ctx.reply(str(exc))
+                await interaction.response.send_message(str(exc), ephemeral=True)
                 return
-            await ctx.reply(f"Joined voice channel {voice_client.channel.name}.")
+            await interaction.response.send_message(
+                f"Joined voice channel {voice_client.channel.name}."
+            )
 
-        @self.command(name="leave")
-        async def leave_voice(ctx: commands.Context) -> None:
-            await self.voice_session.leave(ctx)
-            await ctx.reply("Disconnected from voice channel.")
+        @self.tree.command(name="leave", description="Disconnect the assistant from the voice channel")
+        async def leave_voice(interaction: discord.Interaction) -> None:
+            await self.voice_session.leave(interaction)
+            await interaction.response.send_message("Disconnected from voice channel.")
 
-        @self.command(name="listen")
-        async def listen_voice(ctx: commands.Context, timeout: Optional[int] = None) -> None:
-            if not ctx.voice_client:
-                await ctx.reply("I need to be in a voice channel. Use the join command first.")
+        @self.tree.command(name="listen", description="Listen to the voice channel and transcribe speech")
+        @app_commands.describe(timeout="Seconds to listen before stopping (defaults to 15 seconds)")
+        async def listen_voice(interaction: discord.Interaction, timeout: Optional[int] = None) -> None:
+            voice_client = getattr(interaction.guild, "voice_client", None)
+            if not voice_client:
+                await interaction.response.send_message(
+                    "I need to be in a voice channel. Use the /join command first.",
+                    ephemeral=True,
+                )
                 return
 
             timeout_value = float(timeout or 15)
-            await ctx.reply(f"Listening for up to {timeout_value:.0f} seconds...")
+            await interaction.response.send_message(
+                f"Listening for up to {timeout_value:.0f} seconds..."
+            )
 
             async def on_transcription(user: discord.abc.User, transcript: str) -> None:
                 _LOGGER.info("Transcribed from %s: %s", user, transcript)
-                reply = await self.conversation_manager.generate_reply(ctx.channel.id, transcript)
-                await ctx.channel.send(f"**{user.display_name}:** {transcript}\n**Assistant:** {reply}")
-                if ctx.voice_client:
-                    await self.voice_session.speak(ctx.voice_client, reply)
+                reply = await self.conversation_manager.generate_reply(interaction.channel_id, transcript)
+                channel = interaction.channel
+                if channel:
+                    await channel.send(
+                        f"**{user.display_name}:** {transcript}\n**Assistant:** {reply}"
+                    )
+                if voice_client:
+                    await self.voice_session.speak(voice_client, reply)
 
-            await self.voice_session.listen_once(ctx.voice_client, on_transcription, timeout=timeout_value)
+            await self.voice_session.listen_once(voice_client, on_transcription, timeout=timeout_value)
 
-        @self.command(name="say")
-        async def say_voice(ctx: commands.Context, *, text: str) -> None:
-            if not ctx.voice_client:
-                await ctx.reply("I need to be in a voice channel to speak. Use the join command first.")
+        @self.tree.command(name="say", description="Have the assistant speak in the connected voice channel")
+        @app_commands.describe(text="What you want the assistant to say")
+        async def say_voice(interaction: discord.Interaction, text: str) -> None:
+            voice_client = getattr(interaction.guild, "voice_client", None)
+            if not voice_client:
+                await interaction.response.send_message(
+                    "I need to be in a voice channel to speak. Use the /join command first.",
+                    ephemeral=True,
+                )
                 return
-            await self.voice_session.speak(ctx.voice_client, text)
-            await ctx.reply("Playing synthesized speech.")
+            await self.voice_session.speak(voice_client, text)
+            await interaction.response.send_message("Playing synthesized speech.")
 
-        @self.command(name="status")
-        async def status_command(ctx: commands.Context) -> None:
+        @self.tree.command(name="status", description="Show configuration details for the assistant")
+        async def status_command(interaction: discord.Interaction) -> None:
             embed = discord.Embed(title="Assistant Status", color=discord.Color.blurple())
             embed.add_field(name="Model", value=self.config_data.ollama.model, inline=False)
             embed.add_field(name="Wake Word", value=self.config_data.discord.wake_word, inline=False)
-            embed.add_field(name="History Turns", value=str(self.config_data.conversation.history_turns), inline=False)
-            embed.add_field(name="Status Rotation", value=f"{self.config_data.discord.status_rotation_seconds}s", inline=False)
-            await ctx.reply(embed=embed)
+            embed.add_field(
+                name="History Turns",
+                value=str(self.config_data.conversation.history_turns),
+                inline=False,
+            )
+            embed.add_field(
+                name="Status Rotation",
+                value=f"{self.config_data.discord.status_rotation_seconds}s",
+                inline=False,
+            )
+            await interaction.response.send_message(embed=embed)
 
     async def close(self) -> None:
         self.status_rotator.cancel()
