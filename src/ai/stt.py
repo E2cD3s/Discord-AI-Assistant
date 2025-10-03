@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from io import BufferedIOBase, BytesIO
 from pathlib import Path
+from typing import BinaryIO, Union
 
 from faster_whisper import WhisperModel
 
@@ -27,21 +29,45 @@ class SpeechToText:
             compute_type=config.compute_type,
         )
 
-    async def transcribe(self, audio_path: Path | str) -> str:
-        path = Path(audio_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Audio file for transcription not found: {path}")
+    async def transcribe(self, audio_source: Union[Path, str, BinaryIO, BufferedIOBase, BytesIO]) -> str:
+        path: Path | None = None
+        stream: BinaryIO | BufferedIOBase | BytesIO | None = None
+
+        if isinstance(audio_source, (str, Path)):
+            path = Path(audio_source)
+            if not path.exists():
+                raise FileNotFoundError(f"Audio file for transcription not found: {path}")
+        elif hasattr(audio_source, "read"):
+            stream = audio_source  # type: ignore[assignment]
+        else:
+            raise TypeError("audio_source must be a path-like object or a binary stream")
 
         result = await self._loop.run_in_executor(
             None,
             self._transcribe_sync,
             path,
+            stream,
         )
         return result
 
-    def _transcribe_sync(self, audio_path: Path) -> str:
+    def _transcribe_sync(
+        self,
+        audio_path: Path | None,
+        audio_stream: BinaryIO | BufferedIOBase | BytesIO | None,
+    ) -> str:
+        if audio_path is not None:
+            audio_input: Union[str, BinaryIO, BufferedIOBase, BytesIO] = str(audio_path)
+        elif audio_stream is not None:
+            try:
+                audio_stream.seek(0)
+            except (AttributeError, OSError):
+                _LOGGER.warning("Audio stream is not seekable; transcription accuracy may be affected.")
+            audio_input = audio_stream
+        else:
+            raise ValueError("Either audio_path or audio_stream must be provided for transcription")
+
         segments, _ = self._model.transcribe(
-            str(audio_path),
+            audio_input,
             beam_size=self._config.beam_size,
             vad_filter=self._config.vad,
             vad_parameters={
