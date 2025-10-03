@@ -23,30 +23,43 @@ An offline-ready Discord bot that listens to voice, understands speech using Whi
 
 ## Setup
 
-1. Clone the repository and install Python dependencies:
+The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the platform-specific guides below for detailed instructions, including installing Python, FFmpeg, and other prerequisites:
+
+- [Linux setup guide](docs/setup-linux.md)
+- [Windows setup guide](docs/setup-windows.md)
+
+### Quick start (after prerequisites)
+
+1. Create and activate a virtual environment:
 
    ```bash
    python -m venv .venv
-   source .venv/bin/activate
+   source .venv/bin/activate  # On Windows use: .\.venv\Scripts\Activate.ps1
+   ```
+
+2. Install dependencies:
+
+   ```bash
+   pip install --upgrade pip
    pip install -r requirements.txt
    ```
 
-2. Copy the example configuration and adjust all values:
+3. Copy the example configuration and adjust the values for your environment:
 
    ```bash
    cp config.example.yaml config.yaml
-   nano config.yaml
+   # On Windows (PowerShell): Copy-Item config.example.yaml config.yaml
    ```
 
    Update the Discord token, Ollama model name (for example `llama3`, `mistral`, or any Hugging Face model served by Ollama), speech-to-text paths, and Kokoro voice.
 
-3. Download or generate the models referenced in the configuration:
+4. Download or generate the models referenced in the configuration:
 
    - **Ollama**: `ollama pull mistral` (or your preferred Hugging Face model)
-   - **Faster-Whisper**: download the model directory into `models/faster-whisper-medium`
+   - **Faster-Whisper**: download the model directory into `models/faster-whisper-medium` (or another path referenced in `config.yaml`)
    - **Kokoro**: follow the [Kokoro project](https://github.com/hexgrad/kokoro) instructions to place the pipeline weights in an accessible location. Reference the [VOICES.md table on Hugging Face](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md) for valid speaker IDs.
 
-4. Run the bot:
+5. Run the bot:
 
    ```bash
    python -m src.main --config config.yaml
