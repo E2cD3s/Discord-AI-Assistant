@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, Optional
 
@@ -65,21 +65,24 @@ class VoiceSession:
             sink.cleanup()
 
     async def _process_sink(self, sink: discord.sinks.Sink, on_transcription: TranscriptionCallback) -> None:
+        buffered_audio = []
         for user, audio in sink.audio_data.items():
             if audio is None or audio.file is None:
                 continue
-            audio.file.seek(0)
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(audio.file.getvalue())
-                temp_path = Path(temp_file.name)
-            try:
-                transcript = await self._stt.transcribe(temp_path)
-                if transcript:
-                    await on_transcription(user, transcript)
-                else:
-                    _LOGGER.debug("No transcript produced for user %s", user)
-            finally:
-                temp_path.unlink(missing_ok=True)
+
+            start_time = getattr(audio, "start_time", 0.0)
+            audio_bytes = audio.file.getvalue()
+            buffered_audio.append((start_time, user, audio_bytes))
+
+        buffered_audio.sort(key=lambda item: item[0])
+
+        for _, user, audio_bytes in buffered_audio:
+            stream = BytesIO(audio_bytes)
+            transcript = await self._stt.transcribe(stream)
+            if transcript:
+                await on_transcription(user, transcript)
+            else:
+                _LOGGER.debug("No transcript produced for user %s", user)
 
     async def speak(self, voice_client: discord.VoiceClient, text: str) -> Optional[Path]:
         audio_path = await self._tts.synthesize(text)
