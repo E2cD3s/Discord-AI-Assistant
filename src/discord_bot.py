@@ -205,6 +205,17 @@ class DiscordAssistantBot(commands.Bot):
                         description="The question you want to ask the assistant",
                     )(func)
                 return func
+            option_factory = getattr(discord, "Option", None)
+            option_is_callable = callable(option_factory)
+
+            question_parameter = (
+                option_factory(
+                    str,
+                    "The question you want to ask the assistant",
+                )
+                if option_is_callable
+                else str
+            )
 
             ask_decorator = self.slash_command(
                 name="ask",
@@ -215,7 +226,7 @@ class DiscordAssistantBot(commands.Bot):
             @ask_decorator
             @decorate_question_option
             async def ask_command(
-                ctx: discord.ApplicationContext, question: str
+                ctx: discord.ApplicationContext, question: question_parameter
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await ask_handler(interaction, question)
@@ -249,6 +260,14 @@ class DiscordAssistantBot(commands.Bot):
                         description="What you want the assistant to say",
                     )(func)
                 return func
+            text_parameter = (
+                option_factory(
+                    str,
+                    "What you want the assistant to say",
+                )
+                if option_is_callable
+                else str
+            )
 
             say_decorator = self.slash_command(
                 name="say",
@@ -259,7 +278,7 @@ class DiscordAssistantBot(commands.Bot):
             @say_decorator
             @decorate_text_option
             async def say_command(
-                ctx: discord.ApplicationContext, text: str
+                ctx: discord.ApplicationContext, text: text_parameter
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await say_handler(interaction, text)
