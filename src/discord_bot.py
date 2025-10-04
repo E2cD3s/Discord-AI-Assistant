@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+import typing
 
 import discord
 from discord.ext import commands, tasks
@@ -191,6 +193,18 @@ class DiscordAssistantBot(commands.Bot):
                 annotations = getattr(func, "__annotations__", None)
                 if not annotations:
                     return
+
+                try:
+                    module = sys.modules.get(func.__module__)
+                    resolved = typing.get_type_hints(
+                        func,
+                        getattr(module, "__dict__", None),
+                        getattr(module, "__dict__", None),
+                    )
+                except Exception:
+                    resolved = {}
+
+                annotations.update(resolved)
 
                 ctx_type = getattr(discord, "ApplicationContext", None)
                 if ctx_type and annotations.get("ctx"):
