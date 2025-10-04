@@ -208,11 +208,10 @@ class DiscordAssistantBot(commands.Bot):
             def apply_option_decorator(func: Any, name: str, description: str) -> Any:
                 if not callable(option_decorator):
                     return func
-                # ``discord.commands.option`` accepts the parameter type via the ``type``
-                # keyword argument when using Pycord. Passing it explicitly ensures the
-                # resulting option stores a Python class as ``_raw_type`` which keeps
-                # ``issubclass`` checks within Pycord happy across releases.
-                return option_decorator(name, type=str, description=description)(func)
+                try:
+                    return option_decorator(name, description=description)(func)
+                except TypeError:
+                    return option_decorator(name, str, description=description)(func)
 
             reset_decorator = self.slash_command(
                 name="reset",
