@@ -9,6 +9,7 @@ import discord
 
 from .ai.ollama_client import OllamaClient
 from .config import AppConfig
+from .discord_compat import ensure_app_commands_ready
 from .logging_utils import get_logger
 
 _LOGGER = get_logger(__name__)
@@ -56,23 +57,13 @@ def _ensure_discord_sinks_available() -> None:
             "to enable voice capture."
         )
 
-    if not _app_command_support_available():
+    if not ensure_app_commands_ready():
         raise RuntimeError(
             "discord.app_commands is missing required features (Command, describe, or guild_only)."
             " Install or update 'py-cord[voice]==2.6.1' to enable slash command support."
         )
 
     _LOGGER.debug("discord voice sinks and enums are available")
-
-
-def _app_command_support_available() -> bool:
-    try:
-        from discord import app_commands as _app_commands  # type: ignore
-    except (ImportError, AttributeError):
-        return False
-
-    required_attributes = ("Command", "describe", "guild_only")
-    return all(hasattr(_app_commands, attr) for attr in required_attributes)
 
 
 def _ensure_stt_assets(config: AppConfig) -> None:
