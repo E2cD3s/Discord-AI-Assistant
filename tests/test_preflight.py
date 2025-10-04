@@ -12,7 +12,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def _install_discord_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_discord_stub(
+    monkeypatch: pytest.MonkeyPatch, *, app_commands: types.ModuleType | None = None
+) -> None:
+    for module_name in list(sys.modules):
+        if module_name == "discord" or module_name.startswith("discord."):
+            sys.modules.pop(module_name, None)
+
     fake_discord = types.ModuleType("discord")
     fake_opus = types.SimpleNamespace(is_loaded=lambda: True, load_opus=lambda _: None)
     fake_sinks = types.ModuleType("discord.sinks")
@@ -22,13 +28,17 @@ def _install_discord_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_discord.opus = fake_opus
     fake_discord.sinks = fake_sinks
     fake_discord.enums = fake_enums
+    if app_commands is not None:
+        fake_discord.app_commands = app_commands
 
     monkeypatch.setitem(sys.modules, "discord", fake_discord)
     monkeypatch.setitem(sys.modules, "discord.sinks", fake_sinks)
     monkeypatch.setitem(sys.modules, "discord.enums", fake_enums)
+    if app_commands is not None:
+        monkeypatch.setitem(sys.modules, "discord.app_commands", app_commands)
 
 
-def test_missing_app_command_option_type_surfaces_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_app_command_support_surfaces_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_discord_stub(monkeypatch)
     sys.modules.pop("src.preflight", None)
     preflight = importlib.import_module("src.preflight")
@@ -40,3 +50,19 @@ def test_missing_app_command_option_type_surfaces_runtime_error(monkeypatch: pyt
         sys.modules.pop("src.preflight", None)
 
     assert "py-cord[voice]" in str(excinfo.value)
+
+
+def test_app_command_support_with_required_attributes_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_app_commands = types.ModuleType("discord.app_commands")
+    fake_app_commands.Command = object()
+    fake_app_commands.describe = lambda **_: None
+    fake_app_commands.guild_only = lambda: None
+
+    _install_discord_stub(monkeypatch, app_commands=fake_app_commands)
+    sys.modules.pop("src.preflight", None)
+    preflight = importlib.import_module("src.preflight")
+
+    try:
+        preflight._ensure_discord_sinks_available()
+    finally:
+        sys.modules.pop("src.preflight", None)

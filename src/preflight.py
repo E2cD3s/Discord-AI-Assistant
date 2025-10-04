@@ -56,30 +56,23 @@ def _ensure_discord_sinks_available() -> None:
             "to enable voice capture."
         )
 
-    if not _app_command_option_type_available():
+    if not _app_command_support_available():
         raise RuntimeError(
-            "discord AppCommandOptionType is unavailable. Install or update 'py-cord[voice]==2.6.1' "
-            "to enable slash command support."
+            "discord.app_commands is missing required features (Command, describe, or guild_only)."
+            " Install or update 'py-cord[voice]==2.6.1' to enable slash command support."
         )
 
     _LOGGER.debug("discord voice sinks and enums are available")
 
 
-def _app_command_option_type_available() -> bool:
-    try:
-        from discord import enums as _enums  # type: ignore
-    except (ImportError, AttributeError):
-        _enums = None
-
-    if _enums is not None and hasattr(_enums, "AppCommandOptionType"):
-        return True
-
+def _app_command_support_available() -> bool:
     try:
         from discord import app_commands as _app_commands  # type: ignore
     except (ImportError, AttributeError):
         return False
 
-    return hasattr(_app_commands, "AppCommandOptionType")
+    required_attributes = ("Command", "describe", "guild_only")
+    return all(hasattr(_app_commands, attr) for attr in required_attributes)
 
 
 def _ensure_stt_assets(config: AppConfig) -> None:
