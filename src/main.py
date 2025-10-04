@@ -10,7 +10,6 @@ from .ai.stt import SpeechToText
 from .ai.tts import TextToSpeech
 from .ai.voice_session import VoiceSession
 from .config import AppConfig, load_config
-from .discord_bot import create_bot
 from .logging_utils import configure_logging
 from .preflight import run_preflight_checks
 
@@ -20,6 +19,7 @@ async def run_bot(config: AppConfig) -> None:
     ollama_client = OllamaClient(config.ollama)
     try:
         await run_preflight_checks(config, ollama_client)
+        from .discord_bot import create_bot
         stt = SpeechToText(config.stt)
         tts = TextToSpeech(config.kokoro)
     except Exception:
