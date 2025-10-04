@@ -21,6 +21,16 @@ class VoiceSession:
         self._stt = stt
         self._tts = tts
         self._active_recordings: Dict[int, asyncio.Task[None]] = {}
+        self._listener_tasks: Dict[int, asyncio.Task[None]] = {}
+
+    def _voice_key(self, voice_client: discord.VoiceClient) -> int:
+        guild = getattr(voice_client, "guild", None)
+        if guild is not None:
+            return guild.id
+        channel = getattr(voice_client, "channel", None)
+        if channel is None:
+            raise RuntimeError("Voice client is not connected to any channel")
+        return channel.id
 
     async def join(
         self,
@@ -51,6 +61,7 @@ class VoiceSession:
             guild = getattr(ctx, "guild", None)
             voice_client = getattr(guild, "voice_client", None)
         if voice_client:
+            await self.stop_listening(voice_client)
             await voice_client.disconnect()
 
     async def listen_once(
@@ -62,17 +73,71 @@ class VoiceSession:
         if voice_client.is_playing():
             voice_client.stop()
 
+        _LOGGER.info(
+            "Starting voice capture in channel %s for up to %.1f seconds",
+            voice_client.channel,
+            timeout,
+        )
+
         def after_recording(sink: discord.sinks.Sink, *_) -> None:
             task = asyncio.create_task(self._handle_sink(sink, on_transcription))
-            self._active_recordings[voice_client.channel.id] = task
+            self._active_recordings[self._voice_key(voice_client)] = task
 
         sink = discord.sinks.WaveSink()
         voice_client.start_recording(sink, after_recording)
-        await asyncio.sleep(timeout)
-        voice_client.stop_recording()
-        task = self._active_recordings.pop(voice_client.channel.id, None)
-        if task:
+
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            _LOGGER.info("Voice capture in %s cancelled", voice_client.channel)
+            raise
+        finally:
+            voice_client.stop_recording()
+            task = self._active_recordings.pop(self._voice_key(voice_client), None)
+            if task:
+                await task
+            _LOGGER.info("Completed voice capture in channel %s", voice_client.channel)
+
+    def is_listening(self, voice_client: discord.VoiceClient) -> bool:
+        task = self._listener_tasks.get(self._voice_key(voice_client))
+        return bool(task and not task.done())
+
+    async def start_listening(
+        self,
+        voice_client: discord.VoiceClient,
+        on_transcription: TranscriptionCallback,
+        timeout: float = 20.0,
+    ) -> None:
+        key = self._voice_key(voice_client)
+        if self.is_listening(voice_client):
+            _LOGGER.info("Already listening to channel %s", voice_client.channel)
+            return
+
+        async def _listen_loop() -> None:
+            try:
+                while True:
+                    await self.listen_once(voice_client, on_transcription, timeout)
+            except asyncio.CancelledError:
+                _LOGGER.info("Stopped continuous listening in channel %s", voice_client.channel)
+                raise
+            except Exception:  # pragma: no cover - best effort logging
+                _LOGGER.exception("Unexpected error while listening in channel %s", voice_client.channel)
+
+        task = asyncio.create_task(_listen_loop())
+        self._listener_tasks[key] = task
+        _LOGGER.info("Started continuous listening in channel %s", voice_client.channel)
+
+    async def stop_listening(self, voice_client: discord.VoiceClient) -> None:
+        key = self._voice_key(voice_client)
+        task = self._listener_tasks.pop(key, None)
+        if not task:
+            _LOGGER.info("No active listener to stop in channel %s", voice_client.channel)
+            return
+        task.cancel()
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
 
     async def _handle_sink(self, sink: discord.sinks.Sink, on_transcription: TranscriptionCallback) -> None:
         try:
@@ -92,8 +157,13 @@ class VoiceSession:
 
         buffered_audio.sort(key=lambda item: item[0])
 
+        if not buffered_audio:
+            _LOGGER.info("No audio detected during the last listening window")
+            return
+
         for _, user, audio_bytes in buffered_audio:
             stream = BytesIO(audio_bytes)
+            _LOGGER.debug("Transcribing audio captured from user %s", user)
             transcript = await self._stt.transcribe(stream)
             if transcript:
                 await on_transcription(user, transcript)
