@@ -66,3 +66,24 @@ def test_app_command_support_with_required_attributes_passes(monkeypatch: pytest
         preflight._ensure_discord_sinks_available()
     finally:
         sys.modules.pop("src.preflight", None)
+
+
+def test_app_command_support_can_patch_missing_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_app_commands = types.ModuleType("discord.app_commands")
+    fake_commands_module = types.ModuleType("discord.app_commands.commands")
+    fake_commands_module.Command = object()
+    fake_decorators_module = types.ModuleType("discord.app_commands.decorators")
+    fake_decorators_module.describe = lambda **_: None
+    fake_decorators_module.guild_only = lambda: None
+
+    _install_discord_stub(monkeypatch, app_commands=fake_app_commands)
+    monkeypatch.setitem(sys.modules, "discord.app_commands.commands", fake_commands_module)
+    monkeypatch.setitem(sys.modules, "discord.app_commands.decorators", fake_decorators_module)
+
+    sys.modules.pop("src.preflight", None)
+    preflight = importlib.import_module("src.preflight")
+
+    try:
+        preflight._ensure_discord_sinks_available()
+    finally:
+        sys.modules.pop("src.preflight", None)

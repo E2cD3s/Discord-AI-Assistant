@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from ctypes.util import find_library
 from pathlib import Path
 from shutil import which
@@ -71,8 +72,31 @@ def _app_command_support_available() -> bool:
     except (ImportError, AttributeError):
         return False
 
-    required_attributes = ("Command", "describe", "guild_only")
-    return all(hasattr(_app_commands, attr) for attr in required_attributes)
+    attribute_sources = {
+        "Command": ("discord.app_commands", "discord.app_commands.commands"),
+        "describe": ("discord.app_commands", "discord.app_commands.decorators"),
+        "guild_only": ("discord.app_commands", "discord.app_commands.decorators"),
+    }
+
+    missing_attributes = []
+    for attribute, module_names in attribute_sources.items():
+        if hasattr(_app_commands, attribute):
+            continue
+
+        for module_name in module_names:
+            try:
+                module = importlib.import_module(module_name)
+            except (ImportError, AttributeError):  # pragma: no cover - defensive guard
+                continue
+
+            value = getattr(module, attribute, None)
+            if value is not None:
+                setattr(_app_commands, attribute, value)
+                break
+        else:
+            missing_attributes.append(attribute)
+
+    return not missing_attributes
 
 
 def _ensure_stt_assets(config: AppConfig) -> None:
