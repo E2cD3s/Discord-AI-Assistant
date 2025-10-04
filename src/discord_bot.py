@@ -5,7 +5,7 @@ import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable, Any
+from typing import Any, Dict, List, Optional
 
 import discord
 from discord.ext import commands, tasks
@@ -166,20 +166,76 @@ class DiscordAssistantBot(commands.Bot):
             if self.config_data.discord.guild_ids:
                 slash_kwargs["guild_ids"] = self.config_data.discord.guild_ids
 
-            def register_pycord(handler: Callable[..., Any], *, name: str, description: str) -> None:
-                decorator = self.slash_command(name=name, description=description, **slash_kwargs)
+            reset_decorator = self.slash_command(
+                name="reset",
+                description="Clear the assistant conversation history for this channel",
+                **slash_kwargs,
+            )
 
-                @decorator
-                async def wrapper(ctx: discord.ApplicationContext, *args, **kwargs):
-                    interaction = getattr(ctx, "interaction", ctx)
-                    await handler(interaction, *args, **kwargs)
+            @reset_decorator
+            async def reset_command(ctx: discord.ApplicationContext) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await reset_handler(interaction)
 
-            register_pycord(reset_handler, name="reset", description="Clear the assistant conversation history for this channel")
-            register_pycord(ask_handler, name="ask", description="Ask the assistant a question")
-            register_pycord(join_handler, name="join", description="Summon the assistant to your current voice channel")
-            register_pycord(leave_handler, name="leave", description="Disconnect the assistant from the voice channel")
-            register_pycord(say_handler, name="say", description="Have the assistant speak in the connected voice channel")
-            register_pycord(status_handler, name="status", description="Show configuration details for the assistant")
+            ask_decorator = self.slash_command(
+                name="ask",
+                description="Ask the assistant a question",
+                **slash_kwargs,
+            )
+
+            @ask_decorator
+            async def ask_command(
+                ctx: discord.ApplicationContext, question: str
+            ) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await ask_handler(interaction, question)
+
+            join_decorator = self.slash_command(
+                name="join",
+                description="Summon the assistant to your current voice channel",
+                **slash_kwargs,
+            )
+
+            @join_decorator
+            async def join_command(ctx: discord.ApplicationContext) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await join_handler(interaction)
+
+            leave_decorator = self.slash_command(
+                name="leave",
+                description="Disconnect the assistant from the voice channel",
+                **slash_kwargs,
+            )
+
+            @leave_decorator
+            async def leave_command(ctx: discord.ApplicationContext) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await leave_handler(interaction)
+
+            say_decorator = self.slash_command(
+                name="say",
+                description="Have the assistant speak in the connected voice channel",
+                **slash_kwargs,
+            )
+
+            @say_decorator
+            async def say_command(
+                ctx: discord.ApplicationContext, text: str
+            ) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await say_handler(interaction, text)
+
+            status_decorator = self.slash_command(
+                name="status",
+                description="Show configuration details for the assistant",
+                **slash_kwargs,
+            )
+
+            @status_decorator
+            async def status_command(ctx: discord.ApplicationContext) -> None:
+                interaction = getattr(ctx, "interaction", ctx)
+                await status_handler(interaction)
+
             return
 
         @self.tree.command(name="reset", description="Clear the assistant conversation history for this channel")
