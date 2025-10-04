@@ -44,7 +44,6 @@ def _ensure_opus_loaded() -> None:
 
 def _ensure_discord_sinks_available() -> None:
     try:
-        from discord import enums as _enums  # type: ignore
         from discord import sinks as _sinks  # type: ignore
     except (ImportError, AttributeError) as exc:
         raise RuntimeError(
@@ -56,12 +55,29 @@ def _ensure_discord_sinks_available() -> None:
             "discord.sinks.WaveSink is unavailable. Update py-cord to a version that provides voice sinks."
         )
 
-    if not hasattr(_enums, "AppCommandOptionType"):
+    if not _app_command_option_type_available():
         raise RuntimeError(
-            "discord.enums.AppCommandOptionType is unavailable. Install or update 'py-cord[voice]' to enable slash command support."
+            "discord AppCommandOptionType is unavailable. Install or update 'py-cord[voice]' to enable slash command support."
         )
 
     _LOGGER.debug("discord voice sinks and enums are available")
+
+
+def _app_command_option_type_available() -> bool:
+    try:
+        from discord import enums as _enums  # type: ignore
+    except (ImportError, AttributeError):
+        _enums = None
+
+    if _enums is not None and hasattr(_enums, "AppCommandOptionType"):
+        return True
+
+    try:
+        from discord import app_commands as _app_commands  # type: ignore
+    except (ImportError, AttributeError):
+        return False
+
+    return hasattr(_app_commands, "AppCommandOptionType")
 
 
 def _ensure_stt_assets(config: AppConfig) -> None:
