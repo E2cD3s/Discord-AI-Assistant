@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Dict, Optional
+from contextlib import suppress
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import discord
 from discord import app_commands
@@ -15,6 +17,19 @@ from .config import AppConfig
 from .logging_utils import get_logger
 
 _LOGGER = get_logger(__name__)
+
+
+@dataclass
+class WakeConversationState:
+    voice_client: discord.VoiceClient
+    text_channel_id: Optional[int]
+    active: bool = False
+    initiator_id: Optional[int] = None
+    initiator_name: Optional[str] = None
+    transcripts: List[str] = field(default_factory=list)
+    start_time: float = 0.0
+    inactivity_task: Optional[asyncio.Task[None]] = None
+    max_duration_task: Optional[asyncio.Task[None]] = None
 
 
 class DiscordAssistantBot(commands.Bot):
@@ -33,6 +48,7 @@ class DiscordAssistantBot(commands.Bot):
         self.conversation_manager = conversation_manager
         self.voice_session = voice_session
         self._status_index = 0
+        self._voice_states: Dict[int, WakeConversationState] = {}
         self._wake_cooldowns: Dict[int, float] = {}
         wake_tokens = [token for token in re.split(r"\s+", config.discord.wake_word.strip()) if token]
         pattern = r"\W+".join(re.escape(token) for token in wake_tokens) if wake_tokens else re.escape(config.discord.wake_word)
@@ -70,43 +86,28 @@ class DiscordAssistantBot(commands.Bot):
             except RuntimeError as exc:
                 await interaction.response.send_message(str(exc), ephemeral=True)
                 return
+
+            await self._initialize_voice_state(voice_client, interaction.channel_id)
+
+            async def on_transcription(user: discord.abc.User, transcript: str) -> None:
+                await self._handle_transcription(voice_client, user, transcript)
+
+            await self.voice_session.start_listening(
+                voice_client,
+                on_transcription,
+                timeout=5.0,
+            )
             await interaction.response.send_message(
                 f"Joined voice channel {voice_client.channel.name}."
             )
 
         @self.tree.command(name="leave", description="Disconnect the assistant from the voice channel")
         async def leave_voice(interaction: discord.Interaction) -> None:
+            voice_client = getattr(interaction.guild, "voice_client", None)
+            if voice_client and voice_client.channel:
+                await self._cleanup_voice_state(voice_client.channel.id)
             await self.voice_session.leave(interaction)
             await interaction.response.send_message("Disconnected from voice channel.")
-
-        @self.tree.command(name="listen", description="Listen to the voice channel and transcribe speech")
-        @app_commands.describe(timeout="Seconds to listen before stopping (defaults to 15 seconds)")
-        async def listen_voice(interaction: discord.Interaction, timeout: Optional[int] = None) -> None:
-            voice_client = getattr(interaction.guild, "voice_client", None)
-            if not voice_client:
-                await interaction.response.send_message(
-                    "I need to be in a voice channel. Use the /join command first.",
-                    ephemeral=True,
-                )
-                return
-
-            timeout_value = float(timeout or 15)
-            await interaction.response.send_message(
-                f"Listening for up to {timeout_value:.0f} seconds..."
-            )
-
-            async def on_transcription(user: discord.abc.User, transcript: str) -> None:
-                _LOGGER.info("Transcribed from %s: %s", user, transcript)
-                reply = await self.conversation_manager.generate_reply(interaction.channel_id, transcript)
-                channel = interaction.channel
-                if channel:
-                    await channel.send(
-                        f"**{user.display_name}:** {transcript}\n**Assistant:** {reply}"
-                    )
-                if voice_client:
-                    await self.voice_session.speak(voice_client, reply)
-
-            await self.voice_session.listen_once(voice_client, on_transcription, timeout=timeout_value)
 
         @self.tree.command(name="say", description="Have the assistant speak in the connected voice channel")
         @app_commands.describe(text="What you want the assistant to say")
@@ -120,6 +121,172 @@ class DiscordAssistantBot(commands.Bot):
                 return
             await self.voice_session.speak(voice_client, text)
             await interaction.response.send_message("Playing synthesized speech.")
+
+    async def _initialize_voice_state(
+        self, voice_client: discord.VoiceClient, text_channel_id: Optional[int]
+    ) -> None:
+        channel_id = voice_client.channel.id
+        state = self._voice_states.get(channel_id)
+        if state:
+            state.voice_client = voice_client
+            state.text_channel_id = text_channel_id
+            for task_attr in ("inactivity_task", "max_duration_task"):
+                task = getattr(state, task_attr)
+                if task and not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+                    setattr(state, task_attr, None)
+            state.transcripts.clear()
+            state.active = False
+            state.initiator_id = None
+            state.initiator_name = None
+        else:
+            self._voice_states[channel_id] = WakeConversationState(
+                voice_client=voice_client,
+                text_channel_id=text_channel_id,
+            )
+
+    async def _cleanup_voice_state(self, channel_id: int) -> None:
+        state = self._voice_states.pop(channel_id, None)
+        if not state:
+            return
+        for task in (state.inactivity_task, state.max_duration_task):
+            if task and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    def _set_inactivity_timer(self, channel_id: int, delay: float = 2.0) -> None:
+        state = self._voice_states.get(channel_id)
+        if not state:
+            return
+        if state.inactivity_task and not state.inactivity_task.done():
+            state.inactivity_task.cancel()
+        state.inactivity_task = asyncio.create_task(
+            self._end_conversation_after(channel_id, delay, "silence")
+        )
+
+    def _set_max_duration_timer(self, channel_id: int, duration: float = 30.0) -> None:
+        state = self._voice_states.get(channel_id)
+        if not state:
+            return
+        if state.max_duration_task and not state.max_duration_task.done():
+            return
+        state.max_duration_task = asyncio.create_task(
+            self._end_conversation_after(channel_id, duration, "maximum duration")
+        )
+
+    async def _end_conversation_after(
+        self, channel_id: int, delay: float, reason: str
+    ) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self._finalize_conversation(channel_id, reason)
+        except asyncio.CancelledError:
+            raise
+
+    async def _handle_transcription(
+        self, voice_client: discord.VoiceClient, user: discord.abc.User, transcript: str
+    ) -> None:
+        channel = getattr(voice_client, "channel", None)
+        if channel is None:
+            return
+        state = self._voice_states.get(channel.id)
+        if state is None:
+            return
+
+        state.voice_client = voice_client
+        _LOGGER.info("Transcribed from %s: %s", user, transcript)
+
+        match = self._wake_word_regex.search(transcript)
+        now = time.monotonic()
+
+        if not state.active:
+            if not match:
+                return
+            state.active = True
+            state.start_time = now
+            state.initiator_id = getattr(user, "id", None)
+            state.initiator_name = getattr(user, "display_name", getattr(user, "name", None))
+            state.transcripts.clear()
+            post_wake = transcript[match.end():].strip()
+            if post_wake:
+                state.transcripts.append(post_wake)
+            self._set_inactivity_timer(channel.id)
+            self._set_max_duration_timer(channel.id)
+            return
+
+        if match:
+            content = transcript[match.end():].strip() or transcript
+        else:
+            content = transcript
+
+        if content:
+            state.transcripts.append(content)
+        self._set_inactivity_timer(channel.id)
+
+        if now - state.start_time >= 30.0:
+            await self._finalize_conversation(channel.id, "maximum duration")
+
+    async def _finalize_conversation(self, channel_id: int, reason: str) -> None:
+        state = self._voice_states.get(channel_id)
+        if not state or not state.active:
+            return
+
+        state.active = False
+        current_task = asyncio.current_task()
+
+        inactivity_task = state.inactivity_task
+        state.inactivity_task = None
+        if (
+            inactivity_task
+            and inactivity_task is not current_task
+            and not inactivity_task.done()
+        ):
+            inactivity_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await inactivity_task
+
+        max_duration_task = state.max_duration_task
+        state.max_duration_task = None
+        if max_duration_task and max_duration_task is not current_task and not max_duration_task.done():
+            max_duration_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await max_duration_task
+
+        transcript_text = " ".join(state.transcripts).strip()
+        state.transcripts.clear()
+        if not transcript_text:
+            _LOGGER.info(
+                "Wake conversation in channel %s ended (%s) without speech to forward",
+                channel_id,
+                reason,
+            )
+            return
+
+        text_channel_id = state.text_channel_id or channel_id
+        reply = await self.conversation_manager.generate_reply(text_channel_id, transcript_text)
+
+        text_channel = self.get_channel(text_channel_id)
+        if isinstance(text_channel, (discord.TextChannel, discord.Thread)):
+            speaker = state.initiator_name or "User"
+            await text_channel.send(
+                f"**{speaker}:** {transcript_text}\n**Assistant:** {reply}"
+            )
+        else:
+            _LOGGER.warning(
+                "No text channel available to post transcription response for channel %s",
+                channel_id,
+            )
+
+        try:
+            await self.voice_session.speak(state.voice_client, reply)
+        except Exception:  # pragma: no cover - defensive logging
+            _LOGGER.exception("Failed to play synthesized speech in channel %s", channel_id)
+
+        state.initiator_id = None
+        state.initiator_name = None
 
         @self.tree.command(name="status", description="Show configuration details for the assistant")
         async def status_command(interaction: discord.Interaction) -> None:

@@ -8,7 +8,7 @@ An offline-ready Discord bot that listens to voice, understands speech using Whi
 - ✅ Configurable rotating status messages to keep your bot presence fresh
 - ✅ Conversation memory with configurable history length and sampling parameters
 - ✅ Voice pipeline powered by Faster-Whisper speech-to-text and Kokoro text-to-speech
-- ✅ Slash-friendly commands to join/leave voice, trigger recordings, and reset conversation state
+- ✅ Slash-friendly commands to join/leave voice and reset conversation state
 - ✅ Works fully offline with local Ollama, Whisper and Kokoro models
 
 ## Requirements
@@ -77,17 +77,16 @@ The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the pla
 | --- | --- |
 | `!reset` | Clears the conversation history for the current channel. |
 | `!ask <question>` | Sends a prompt directly to the assistant and replies with the answer. |
-| `!join` | Summons the bot to your current voice channel. |
+| `!join` | Summons the bot to your current voice channel and begins passively transcribing for wake-word requests. |
 | `!leave` | Disconnects the bot from voice. |
-| `!listen [timeout]` | Records the voice channel for the specified seconds (default 15), transcribes speech, and replies with text and synthesized audio. |
 | `!say <text>` | Forces the assistant to speak the provided text in voice chat. |
 | `!status` | Displays key runtime configuration details. |
 
 ## Wake Word
 
-The bot listens for the configured wake word in text channels (default `hey assistant`). After hearing it, the assistant will respond directly in the channel or spawn a thread (configurable) and optionally speak back if it is present in a voice channel.
+When connected to voice, the assistant continuously transcribes the channel audio and waits for your configured wake word (default `hey assistant`). Once it hears the wake word it captures the rest of the utterance (up to 30 seconds or until you stop speaking), sends the transcript to Ollama, and replies in the paired text channel while simultaneously playing the Kokoro TTS response in voice.
 
-A per-channel cooldown prevents accidental rapid triggers. Configure `wake_word_cooldown_seconds` in `config.yaml` to tune responsiveness.
+Wake-word detection is also supported in text channels. A per-channel cooldown prevents accidental rapid triggers. Configure `wake_word_cooldown_seconds` in `config.yaml` to tune responsiveness.
 
 ## Logging
 
