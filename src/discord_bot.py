@@ -72,12 +72,16 @@ class DiscordAssistantBot(commands.Bot):
 
     def _register_commands(self) -> None:
         @self.tree.command(name="reset", description="Clear the assistant conversation history for this channel")
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def reset_conversation(interaction: discord.Interaction) -> None:
             await self.conversation_manager.reset(interaction.channel_id)
             await interaction.response.send_message("Conversation history cleared for this channel.")
 
         @self.tree.command(name="ask", description="Ask the assistant a question")
         @app_commands.describe(question="The question you want to ask the assistant")
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def ask(interaction: discord.Interaction, question: str) -> None:
             await interaction.response.defer(thinking=True)
             reply = await self.conversation_manager.generate_reply(interaction.channel_id, question)
@@ -85,6 +89,8 @@ class DiscordAssistantBot(commands.Bot):
 
         @self.tree.command(name="join", description="Summon the assistant to your current voice channel")
         @app_commands.guild_only()
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def join_voice(interaction: discord.Interaction) -> None:
             try:
                 voice_client = await self.voice_session.join(interaction)
@@ -107,6 +113,8 @@ class DiscordAssistantBot(commands.Bot):
             )
 
         @self.tree.command(name="leave", description="Disconnect the assistant from the voice channel")
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def leave_voice(interaction: discord.Interaction) -> None:
             voice_client = getattr(interaction.guild, "voice_client", None)
             if voice_client and voice_client.channel:
@@ -116,6 +124,8 @@ class DiscordAssistantBot(commands.Bot):
 
         @self.tree.command(name="say", description="Have the assistant speak in the connected voice channel")
         @app_commands.describe(text="What you want the assistant to say")
+        @app_commands.allowed_installs(guilds=True, users=False)
+        @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def say_voice(interaction: discord.Interaction, text: str) -> None:
             voice_client = getattr(interaction.guild, "voice_client", None)
             if not voice_client:
