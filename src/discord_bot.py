@@ -196,6 +196,15 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await reset_handler(interaction)
 
+            option_decorator = getattr(discord, "option", None)
+
+            def decorate_question_option(func: Any) -> Any:
+                if callable(option_decorator):
+                    return option_decorator(
+                        "question",
+                        description="The question you want to ask the assistant",
+                    )(func)
+                return func
             option_factory = getattr(discord, "Option", None)
             option_is_callable = callable(option_factory)
 
@@ -215,6 +224,7 @@ class DiscordAssistantBot(commands.Bot):
             )
 
             @ask_decorator
+            @decorate_question_option
             async def ask_command(
                 ctx: discord.ApplicationContext, question: question_parameter
             ) -> None:
@@ -243,6 +253,13 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await leave_handler(interaction)
 
+            def decorate_text_option(func: Any) -> Any:
+                if callable(option_decorator):
+                    return option_decorator(
+                        "text",
+                        description="What you want the assistant to say",
+                    )(func)
+                return func
             text_parameter = (
                 option_factory(
                     str,
@@ -259,6 +276,7 @@ class DiscordAssistantBot(commands.Bot):
             )
 
             @say_decorator
+            @decorate_text_option
             async def say_command(
                 ctx: discord.ApplicationContext, text: text_parameter
             ) -> None:
