@@ -185,6 +185,24 @@ class DiscordAssistantBot(commands.Bot):
             if self.config_data.discord.guild_ids:
                 slash_kwargs["guild_ids"] = self.config_data.discord.guild_ids
 
+            def normalize_pycord_annotations(
+                func: Any, option_types: Optional[Dict[str, Any]] = None
+            ) -> None:
+                annotations = getattr(func, "__annotations__", None)
+                if not annotations:
+                    return
+
+                ctx_type = getattr(discord, "ApplicationContext", None)
+                if ctx_type and annotations.get("ctx"):
+                    annotations["ctx"] = ctx_type
+
+                if not option_types:
+                    return
+
+                for name, value in option_types.items():
+                    if name in annotations:
+                        annotations[name] = value
+
             reset_decorator = self.slash_command(
                 name="reset",
                 description="Clear the assistant conversation history for this channel",
@@ -231,6 +249,8 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await ask_handler(interaction, question)
 
+            normalize_pycord_annotations(ask_command, {"question": str})
+
             join_decorator = self.slash_command(
                 name="join",
                 description="Summon the assistant to your current voice channel",
@@ -241,6 +261,8 @@ class DiscordAssistantBot(commands.Bot):
             async def join_command(ctx: discord.ApplicationContext) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await join_handler(interaction)
+
+            normalize_pycord_annotations(join_command)
 
             leave_decorator = self.slash_command(
                 name="leave",
@@ -283,6 +305,8 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await say_handler(interaction, text)
 
+            normalize_pycord_annotations(say_command, {"text": str})
+
             status_decorator = self.slash_command(
                 name="status",
                 description="Show configuration details for the assistant",
@@ -293,6 +317,8 @@ class DiscordAssistantBot(commands.Bot):
             async def status_command(ctx: discord.ApplicationContext) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await status_handler(interaction)
+
+            normalize_pycord_annotations(status_command)
 
             return
 
