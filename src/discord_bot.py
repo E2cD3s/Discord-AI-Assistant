@@ -81,6 +81,10 @@ class DiscordAssistantBot(commands.Bot):
         if self._commands_synced:
             return
 
+        tree = getattr(self, "tree", None)
+        if tree is None:  # pragma: no cover - defensive guard
+            return
+
         if self.config_data.discord.guild_ids:
             for guild_id in self.config_data.discord.guild_ids:
                 guild = discord.Object(id=guild_id)
@@ -177,6 +181,18 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await reset_handler(interaction)
 
+            option_factory = getattr(discord, "Option", None)
+            option_is_callable = callable(option_factory)
+
+            question_parameter = (
+                option_factory(
+                    str,
+                    "The question you want to ask the assistant",
+                )
+                if option_is_callable
+                else str
+            )
+
             ask_decorator = self.slash_command(
                 name="ask",
                 description="Ask the assistant a question",
@@ -185,7 +201,7 @@ class DiscordAssistantBot(commands.Bot):
 
             @ask_decorator
             async def ask_command(
-                ctx: discord.ApplicationContext, question: str
+                ctx: discord.ApplicationContext, question: question_parameter
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await ask_handler(interaction, question)
@@ -212,6 +228,15 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await leave_handler(interaction)
 
+            text_parameter = (
+                option_factory(
+                    str,
+                    "What you want the assistant to say",
+                )
+                if option_is_callable
+                else str
+            )
+
             say_decorator = self.slash_command(
                 name="say",
                 description="Have the assistant speak in the connected voice channel",
@@ -220,7 +245,7 @@ class DiscordAssistantBot(commands.Bot):
 
             @say_decorator
             async def say_command(
-                ctx: discord.ApplicationContext, text: str
+                ctx: discord.ApplicationContext, text: text_parameter
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await say_handler(interaction, text)
