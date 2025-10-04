@@ -12,6 +12,16 @@ _REQUIRED_ATTRIBUTES = {
     "Command": ("discord.app_commands", "discord.app_commands.commands"),
     "describe": ("discord.app_commands", "discord.app_commands.decorators"),
     "guild_only": ("discord.app_commands", "discord.app_commands.decorators"),
+    "allowed_installs": (
+        "discord.app_commands",
+        "discord.app_commands.decorators",
+        "discord.app_commands.checks",
+    ),
+    "allowed_contexts": (
+        "discord.app_commands",
+        "discord.app_commands.decorators",
+        "discord.app_commands.checks",
+    ),
 }
 
 
@@ -31,6 +41,7 @@ def ensure_app_commands_ready(*, raise_on_failure: bool = False) -> bool:
     _backfill_app_command_errors(discord)
     _backfill_app_command_utils(discord)
     _backfill_app_command_flags(discord)
+    _backfill_app_command_checks(discord)
     _backfill_app_command_state(discord)
 
     try:
@@ -423,6 +434,107 @@ def _backfill_app_command_flags(discord_module: object) -> None:
                 return values
 
         setattr(flags_module, "AppCommandContext", AppCommandContext)
+
+
+def _backfill_app_command_checks(discord_module: object) -> None:
+    app_commands = getattr(discord_module, "app_commands", None)
+    if app_commands is None:
+        return
+
+    checks_module = getattr(app_commands, "checks", None)
+
+    if not hasattr(app_commands, "allowed_installs"):
+        if checks_module is not None and hasattr(checks_module, "allowed_installs"):
+            setattr(app_commands, "allowed_installs", checks_module.allowed_installs)
+        else:
+            _ensure_allowed_installs_backfill(discord_module, app_commands)
+
+    if not hasattr(app_commands, "allowed_contexts"):
+        if checks_module is not None and hasattr(checks_module, "allowed_contexts"):
+            setattr(app_commands, "allowed_contexts", checks_module.allowed_contexts)
+        else:
+            _ensure_allowed_contexts_backfill(discord_module, app_commands)
+
+
+def _ensure_allowed_installs_backfill(discord_module: object, app_commands_module) -> None:
+    flags_module = getattr(discord_module, "flags", None)
+    AppInstallationType = getattr(flags_module, "AppInstallationType", None)
+    if AppInstallationType is None:
+        return
+
+    command_cls = getattr(app_commands_module, "Command", None)
+    if command_cls is not None and not hasattr(command_cls, "_discord_ai_allowed_installs_patch"):
+        original_to_dict = getattr(command_cls, "to_dict", None)
+
+        if callable(original_to_dict):
+
+            def to_dict(self, *args, **kwargs):
+                data = original_to_dict(self, *args, **kwargs)
+                flags = getattr(self, "_allowed_installs", None)
+                if flags is not None:
+                    values = flags.to_array()
+                    if values:
+                        data["integration_types"] = values
+                return data
+
+            setattr(command_cls, "to_dict", to_dict)
+            setattr(command_cls, "_discord_ai_allowed_installs_patch", True)
+
+    def allowed_installs(*, guilds: Optional[bool] = None, users: Optional[bool] = None):
+        flags = AppInstallationType(guild=guilds, user=users)
+
+        def decorator(command):
+            setattr(command, "_allowed_installs", flags)
+
+            return command
+
+        return decorator
+
+    setattr(app_commands_module, "allowed_installs", allowed_installs)
+
+
+def _ensure_allowed_contexts_backfill(discord_module: object, app_commands_module) -> None:
+    flags_module = getattr(discord_module, "flags", None)
+    AppCommandContext = getattr(flags_module, "AppCommandContext", None)
+    if AppCommandContext is None:
+        return
+
+    command_cls = getattr(app_commands_module, "Command", None)
+    if command_cls is not None and not hasattr(command_cls, "_discord_ai_allowed_contexts_patch"):
+        original_to_dict = getattr(command_cls, "to_dict", None)
+
+        if callable(original_to_dict):
+
+            def to_dict(self, *args, **kwargs):
+                data = original_to_dict(self, *args, **kwargs)
+                flags = getattr(self, "_allowed_contexts", None)
+                if flags is not None:
+                    values = flags.to_array()
+                    if values:
+                        data["contexts"] = values
+                return data
+
+            setattr(command_cls, "to_dict", to_dict)
+            setattr(command_cls, "_discord_ai_allowed_contexts_patch", True)
+
+    def allowed_contexts(
+        *,
+        guilds: Optional[bool] = None,
+        dms: Optional[bool] = None,
+        private_channels: Optional[bool] = None,
+    ):
+        flags = AppCommandContext(
+            guild=guilds, dm_channel=dms, private_channel=private_channels
+        )
+
+        def decorator(command):
+            setattr(command, "_allowed_contexts", flags)
+
+            return command
+
+        return decorator
+
+    setattr(app_commands_module, "allowed_contexts", allowed_contexts)
 
 
 def _backfill_app_command_state(discord_module: object) -> None:
