@@ -58,6 +58,7 @@ class KokoroConfig:
     emotion: str = "neutral"
     output_dir: str = "tts_output"
     format: str = "wav"
+    lang_code: str = "en"
 
 
 @dataclass
@@ -170,6 +171,7 @@ def load_config(path: Path | str) -> AppConfig:
             emotion=raw_config.get("kokoro", {}).get("emotion", "neutral"),
             output_dir=raw_config.get("kokoro", {}).get("output_dir", "tts_output"),
             format=raw_config.get("kokoro", {}).get("format", "wav"),
+            lang_code=raw_config.get("kokoro", {}).get("lang_code", "en"),
         ),
         logging=LoggingConfig(
             level=raw_config.get("logging", {}).get("level", "INFO"),

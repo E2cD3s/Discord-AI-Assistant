@@ -47,6 +47,7 @@ kokoro:
   emotion: "neutral"
   output_dir: "tts_output"
   format: "wav"
+  lang_code: "en"  # See https://github.com/hexgrad/kokoro for supported language codes
 
 logging:
   level: "INFO"
