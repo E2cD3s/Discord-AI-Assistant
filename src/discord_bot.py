@@ -81,18 +81,6 @@ class DiscordAssistantBot(commands.Bot):
         if self._commands_synced:
             return
 
-        if self._is_pycord and hasattr(self, "sync_commands"):
-            if self.config_data.discord.guild_ids:
-                await self.sync_commands(guild_ids=self.config_data.discord.guild_ids)
-            else:
-                await self.sync_commands()
-            self._commands_synced = True
-            return
-
-        tree = getattr(self, "tree", None)
-        if tree is None:
-            return
-
         if self.config_data.discord.guild_ids:
             for guild_id in self.config_data.discord.guild_ids:
                 guild = discord.Object(id=guild_id)
@@ -100,6 +88,8 @@ class DiscordAssistantBot(commands.Bot):
                 await tree.sync(guild=guild)
         else:
             await tree.sync()
+
+        self._commands_synced = True
 
         self._commands_synced = True
 
