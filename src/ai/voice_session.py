@@ -3,9 +3,19 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 import discord
+
+try:  # pragma: no cover - optional dependency resolution
+    from discord import sinks as discord_sinks
+except (ImportError, AttributeError):  # pragma: no cover - handled at runtime
+    discord_sinks = None
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from discord.sinks import Sink as DiscordSink
+else:
+    DiscordSink = Any
 
 from ..logging_utils import get_logger
 from .stt import SpeechToText
@@ -79,12 +89,13 @@ class VoiceSession:
             timeout,
         )
 
-        def after_recording(sink: discord.sinks.Sink, *_) -> None:
-            task = asyncio.create_task(self._handle_sink(sink, on_transcription))
+        wave_sink = self._create_wave_sink()
+
+        def after_recording(completed_sink: DiscordSink, *_) -> None:
+            task = asyncio.create_task(self._handle_sink(completed_sink, on_transcription))
             self._active_recordings[self._voice_key(voice_client)] = task
 
-        sink = discord.sinks.WaveSink()
-        voice_client.start_recording(sink, after_recording)
+        voice_client.start_recording(wave_sink, after_recording)
 
         try:
             await asyncio.sleep(timeout)
@@ -139,13 +150,26 @@ class VoiceSession:
         except asyncio.CancelledError:
             pass
 
-    async def _handle_sink(self, sink: discord.sinks.Sink, on_transcription: TranscriptionCallback) -> None:
+    def _create_wave_sink(self) -> DiscordSink:
+        if discord_sinks is None:
+            raise RuntimeError(
+                "The installed Discord library does not expose voice sinks. "
+                "Install 'py-cord[voice]>=2.5.0' to enable voice recording support."
+            )
+        wave_sink = getattr(discord_sinks, "WaveSink", None)
+        if wave_sink is None:
+            raise RuntimeError(
+                "discord.sinks.WaveSink is unavailable. Update to a newer version of py-cord to continue."
+            )
+        return wave_sink()
+
+    async def _handle_sink(self, sink: DiscordSink, on_transcription: TranscriptionCallback) -> None:
         try:
             await self._process_sink(sink, on_transcription)
         finally:
             sink.cleanup()
 
-    async def _process_sink(self, sink: discord.sinks.Sink, on_transcription: TranscriptionCallback) -> None:
+    async def _process_sink(self, sink: DiscordSink, on_transcription: TranscriptionCallback) -> None:
         buffered_audio = []
         for user, audio in sink.audio_data.items():
             if audio is None or audio.file is None:

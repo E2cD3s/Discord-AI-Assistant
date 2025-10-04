@@ -42,6 +42,22 @@ def _ensure_opus_loaded() -> None:
     _LOGGER.debug("Loaded Opus codec from %s", library_name)
 
 
+def _ensure_discord_sinks_available() -> None:
+    try:
+        from discord import sinks as _sinks  # type: ignore
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            "discord.sinks module not found. Install 'py-cord[voice]>=2.5.0' to enable voice capture."
+        ) from exc
+
+    if not hasattr(_sinks, "WaveSink"):
+        raise RuntimeError(
+            "discord.sinks.WaveSink is unavailable. Update py-cord to a version that provides voice sinks."
+        )
+
+    _LOGGER.debug("discord.sinks.WaveSink is available")
+
+
 def _ensure_stt_assets(config: AppConfig) -> None:
     model_path = Path(config.stt.model_path)
     if not model_path.exists():
@@ -55,6 +71,7 @@ async def run_preflight_checks(config: AppConfig, ollama_client: OllamaClient) -
 
     _ensure_ffmpeg_available()
     _ensure_opus_loaded()
+    _ensure_discord_sinks_available()
     _ensure_stt_assets(config)
 
     try:
