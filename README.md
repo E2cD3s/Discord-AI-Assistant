@@ -56,7 +56,7 @@ The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the pla
 4. Download or generate the models referenced in the configuration:
 
    - **Ollama**: `ollama pull mistral` (or your preferred Hugging Face model)
-   - **Faster-Whisper**: download the model directory into `models/faster-whisper-medium` (or another path referenced in `config.yaml`)
+   - **Faster-Whisper**: run `python scripts/download_faster_whisper.py medium` to fetch the Medium checkpoint into `models/faster-whisper-medium` (pass a destination path as the second argument to change the location). Other sizes such as `small` or `large-v3` are supported—match the value you set in `config.yaml`.
    - **Kokoro**: follow the [Kokoro project](https://github.com/hexgrad/kokoro) instructions to place the pipeline weights in an accessible location. Reference the [VOICES.md table on Hugging Face](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md) for valid speaker IDs.
 
 5. Run the bot:

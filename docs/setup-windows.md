@@ -54,7 +54,7 @@ Update the Discord bot token, local model paths, and any voice or logging prefer
 ## 6. Prepare local AI services
 
 - **Ollama**: Install the [Windows release](https://ollama.ai/download) and run `ollama pull mistral` (or your preferred model) from a new terminal.
-- **Faster-Whisper**: Download the desired model directory and update `stt.model_path` in `config.yaml` to point at it.
+- **Faster-Whisper**: From the project directory run `python scripts/download_faster_whisper.py medium` to download the Medium checkpoint into `models\faster-whisper-medium`. Adjust the size (for example `small`, `large-v3`) or pass an explicit destination as needed and update `stt.model_path` accordingly.
 - **Kokoro voices**: Follow the [Kokoro instructions](https://github.com/hexgrad/kokoro) to download voices locally. Make sure the `voice` value in `config.yaml` matches an installed voice ID.
 
 ## 7. Launch the bot
