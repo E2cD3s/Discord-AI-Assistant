@@ -28,7 +28,7 @@ class TextToSpeech:
         output_dir.mkdir(parents=True, exist_ok=True)
         self._loop = asyncio.get_running_loop()
         _LOGGER.info("Initializing Kokoro pipeline with voice %s", config.voice)
-        self._pipeline = KPipeline()
+        self._pipeline = KPipeline(lang_code=config.lang_code)
 
     async def synthesize(self, text: str, filename: Optional[str] = None) -> Path:
         if not text:
