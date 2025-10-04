@@ -8,13 +8,16 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import discord
-from discord import app_commands
 from discord.ext import commands, tasks
 
 from .ai.conversation_manager import ConversationManager
 from .ai.voice_session import VoiceSession
 from .config import AppConfig
 from .logging_utils import get_logger
+from .discord_compat import ensure_app_commands_ready
+
+ensure_app_commands_ready(raise_on_failure=True)
+from discord import app_commands
 
 _LOGGER = get_logger(__name__)
 
@@ -47,6 +50,8 @@ class DiscordAssistantBot(commands.Bot):
         self.config_data = config
         self.conversation_manager = conversation_manager
         self.voice_session = voice_session
+        if not hasattr(self, "tree"):
+            self.tree = app_commands.CommandTree(self)
         self._status_index = 0
         self._voice_states: Dict[int, WakeConversationState] = {}
         self._wake_cooldowns: Dict[int, float] = {}
