@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from ctypes.util import find_library
 from pathlib import Path
 from shutil import which
@@ -64,6 +65,39 @@ def _ensure_discord_sinks_available() -> None:
         )
 
     _LOGGER.debug("discord voice sinks and enums are available")
+
+
+def _app_command_support_available() -> bool:
+    try:
+        from discord import app_commands as _app_commands  # type: ignore
+    except (ImportError, AttributeError):
+        return False
+
+    attribute_sources = {
+        "Command": ("discord.app_commands", "discord.app_commands.commands"),
+        "describe": ("discord.app_commands", "discord.app_commands.decorators"),
+        "guild_only": ("discord.app_commands", "discord.app_commands.decorators"),
+    }
+
+    missing_attributes = []
+    for attribute, module_names in attribute_sources.items():
+        if hasattr(_app_commands, attribute):
+            continue
+
+        for module_name in module_names:
+            try:
+                module = importlib.import_module(module_name)
+            except (ImportError, AttributeError):  # pragma: no cover - defensive guard
+                continue
+
+            value = getattr(module, attribute, None)
+            if value is not None:
+                setattr(_app_commands, attribute, value)
+                break
+        else:
+            missing_attributes.append(attribute)
+
+    return not missing_attributes
 
 
 def _ensure_stt_assets(config: AppConfig) -> None:
