@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import wave
 from pathlib import Path
 from typing import Optional
 
@@ -15,10 +16,14 @@ except ImportError as exc:  # pragma: no cover - dependency error
 
 from kokoro.pipeline import LANG_CODES  # type: ignore
 
+import numpy as np
+
 from ..config import KokoroConfig
 from ..logging_utils import get_logger
 
 _LOGGER = get_logger(__name__)
+
+_SAMPLE_RATE_HZ = 24_000
 
 
 class TextToSpeech:
@@ -49,14 +54,29 @@ class TextToSpeech:
         output_dir.mkdir(parents=True, exist_ok=True)
         file_stem = filename or f"tts_{int(time.time())}"
         output_path = output_dir / f"{file_stem}.{self._config.format}"
-        self._pipeline.save_wav(
-            text,
-            output_path,
-            speaker=self._config.voice,
-            speed=self._config.speed,
-            emotion=self._config.emotion,
-        )
-        _LOGGER.debug("Generated speech saved to %s", output_path)
+        segments_written = 0
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit audio
+            wav_file.setframerate(_SAMPLE_RATE_HZ)
+
+            for result in self._pipeline(
+                text,
+                voice=self._config.voice,
+                speed=self._config.speed,
+            ):
+                audio = result.audio
+                if audio is None:
+                    continue
+                audio = audio.detach().cpu().numpy()
+                audio = np.clip(audio, -1.0, 1.0)
+                wav_file.writeframes((audio * 32767.0).astype(np.int16).tobytes())
+                segments_written += 1
+
+        if segments_written == 0:
+            raise RuntimeError("Kokoro TTS produced no audio for the requested text")
+
+        _LOGGER.debug("Generated speech saved to %s (%d segment%s)", output_path, segments_written, "s" if segments_written != 1 else "")
         return output_path
 
     @staticmethod
