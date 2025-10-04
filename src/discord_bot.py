@@ -19,6 +19,8 @@ from .discord_compat import ensure_app_commands_ready
 ensure_app_commands_ready(raise_on_failure=True)
 from discord import app_commands
 
+_InteractionResponded = getattr(discord, "InteractionResponded", RuntimeError)
+
 _LOGGER = get_logger(__name__)
 
 
@@ -95,8 +97,6 @@ class DiscordAssistantBot(commands.Bot):
 
         self._commands_synced = True
 
-        self._commands_synced = True
-
     def _register_commands(self) -> None:
         slash_registration = self._register_slash_commands
         prefix_registration = self._register_prefix_commands
@@ -108,26 +108,34 @@ class DiscordAssistantBot(commands.Bot):
             try:
                 await self._reset_channel(interaction.channel_id)
             except RuntimeError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                await self._send_interaction_message(
+                    interaction, str(exc), ephemeral=True
+                )
                 return
-            await interaction.response.send_message(
-                "Conversation history cleared for this channel."
+            await self._send_interaction_message(
+                interaction, "Conversation history cleared for this channel."
             )
 
         async def ask_handler(interaction: discord.Interaction, question: str) -> None:
-            await interaction.response.defer(thinking=True)
+            await self._defer_interaction(interaction)
             try:
                 reply = await self._ask_channel(interaction.channel_id, question)
             except RuntimeError as exc:
-                await interaction.followup.send(str(exc), ephemeral=True)
+                await self._send_interaction_message(
+                    interaction, str(exc), ephemeral=True, prefer_followup=True
+                )
                 return
-            await interaction.followup.send(reply)
+            await self._send_interaction_message(
+                interaction, reply, prefer_followup=True
+            )
 
         async def join_handler(interaction: discord.Interaction) -> None:
             try:
                 voice_client = await self.voice_session.join(interaction)
             except RuntimeError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                await self._send_interaction_message(
+                    interaction, str(exc), ephemeral=True
+                )
                 return
 
             await self._initialize_voice_state(voice_client, interaction.channel_id)
@@ -140,8 +148,8 @@ class DiscordAssistantBot(commands.Bot):
                 on_transcription,
                 timeout=5.0,
             )
-            await interaction.response.send_message(
-                f"Joined voice channel {voice_client.channel.name}."
+            await self._send_interaction_message(
+                interaction, f"Joined voice channel {voice_client.channel.name}."
             )
 
         async def leave_handler(interaction: discord.Interaction) -> None:
@@ -149,21 +157,28 @@ class DiscordAssistantBot(commands.Bot):
             if voice_client and voice_client.channel:
                 await self._cleanup_voice_state(voice_client.channel.id)
             await self.voice_session.leave(interaction)
-            await interaction.response.send_message("Disconnected from voice channel.")
+            await self._send_interaction_message(
+                interaction, "Disconnected from voice channel."
+            )
 
         async def say_handler(interaction: discord.Interaction, text: str) -> None:
             voice_client = getattr(interaction.guild, "voice_client", None)
             if not voice_client:
-                await interaction.response.send_message(
+                await self._send_interaction_message(
+                    interaction,
                     "I need to be in a voice channel to speak. Use the /join command first.",
                     ephemeral=True,
                 )
                 return
             await self.voice_session.speak(voice_client, text)
-            await interaction.response.send_message("Playing synthesized speech.")
+            await self._send_interaction_message(
+                interaction, "Playing synthesized speech."
+            )
 
         async def status_handler(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(embed=self._build_status_embed())
+            await self._send_interaction_message(
+                interaction, embed=self._build_status_embed()
+            )
 
         if self._is_pycord:
             slash_kwargs: Dict[str, Any] = {}
@@ -363,6 +378,71 @@ class DiscordAssistantBot(commands.Bot):
         @self.command(name="status", help="Show configuration details for the assistant")
         async def status_prefix(ctx: commands.Context) -> None:
             await ctx.send(embed=self._build_status_embed())
+
+    async def _defer_interaction(self, interaction: discord.Interaction) -> None:
+        response = getattr(interaction, "response", None)
+        if response is None:
+            return
+
+        defer = getattr(response, "defer", None)
+        if not callable(defer):  # pragma: no cover - defensive guard
+            return
+
+        try:
+            await defer(thinking=True)
+        except TypeError:
+            await defer()
+
+    async def _send_interaction_message(
+        self,
+        interaction: discord.Interaction,
+        content: Optional[str] = None,
+        *,
+        ephemeral: bool = False,
+        prefer_followup: bool = False,
+        embed: Optional[discord.Embed] = None,
+    ) -> None:
+        kwargs: Dict[str, Any] = {}
+        if content is not None:
+            kwargs["content"] = content
+        if embed is not None:
+            kwargs["embed"] = embed
+        if not kwargs:
+            return
+
+        response = getattr(interaction, "response", None)
+        followup = getattr(interaction, "followup", None)
+
+        async def _send_via_followup() -> bool:
+            if followup is None or not hasattr(followup, "send"):
+                return False
+            await followup.send(**kwargs, ephemeral=ephemeral)
+            return True
+
+        if prefer_followup:
+            if await _send_via_followup():
+                return
+
+        if response is not None:
+            is_done = getattr(response, "is_done", None)
+            if callable(is_done) and is_done():
+                if await _send_via_followup():
+                    return
+            send_message = getattr(response, "send_message", None)
+            if callable(send_message):
+                try:
+                    await send_message(ephemeral=ephemeral, **kwargs)
+                    return
+                except _InteractionResponded:
+                    if await _send_via_followup():
+                        return
+
+        if await _send_via_followup():
+            return
+
+        channel = getattr(interaction, "channel", None)
+        if channel is not None and hasattr(channel, "send"):
+            await channel.send(**kwargs)
 
     async def _reset_channel(self, channel_id: Optional[int]) -> None:
         if channel_id is None:
