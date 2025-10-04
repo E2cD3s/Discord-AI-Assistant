@@ -137,6 +137,23 @@ class DiscordAssistantBot(commands.Bot):
             await self.voice_session.speak(voice_client, text)
             await interaction.response.send_message("Playing synthesized speech.")
 
+        @self.tree.command(name="status", description="Show configuration details for the assistant")
+        async def status_command(interaction: discord.Interaction) -> None:
+            embed = discord.Embed(title="Assistant Status", color=discord.Color.blurple())
+            embed.add_field(name="Model", value=self.config_data.ollama.model, inline=False)
+            embed.add_field(name="Wake Word", value=self.config_data.discord.wake_word, inline=False)
+            embed.add_field(
+                name="History Turns",
+                value=str(self.config_data.conversation.history_turns),
+                inline=False,
+            )
+            embed.add_field(
+                name="Status Rotation",
+                value=f"{self.config_data.discord.status_rotation_seconds}s",
+                inline=False,
+            )
+            await interaction.response.send_message(embed=embed)
+
     async def _initialize_voice_state(
         self, voice_client: discord.VoiceClient, text_channel_id: Optional[int]
     ) -> None:
@@ -302,23 +319,6 @@ class DiscordAssistantBot(commands.Bot):
 
         state.initiator_id = None
         state.initiator_name = None
-
-        @self.tree.command(name="status", description="Show configuration details for the assistant")
-        async def status_command(interaction: discord.Interaction) -> None:
-            embed = discord.Embed(title="Assistant Status", color=discord.Color.blurple())
-            embed.add_field(name="Model", value=self.config_data.ollama.model, inline=False)
-            embed.add_field(name="Wake Word", value=self.config_data.discord.wake_word, inline=False)
-            embed.add_field(
-                name="History Turns",
-                value=str(self.config_data.conversation.history_turns),
-                inline=False,
-            )
-            embed.add_field(
-                name="Status Rotation",
-                value=f"{self.config_data.discord.status_rotation_seconds}s",
-                inline=False,
-            )
-            await interaction.response.send_message(embed=embed)
 
     async def close(self) -> None:
         self.status_rotator.cancel()
