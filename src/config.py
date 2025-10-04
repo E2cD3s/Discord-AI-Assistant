@@ -54,6 +54,7 @@ class STTConfig:
 @dataclass
 class KokoroConfig:
     voice: str
+    lang_code: str = "en"
     speed: float = 1.0
     emotion: str = "neutral"
     output_dir: str = "tts_output"
@@ -166,6 +167,7 @@ def load_config(path: Path | str) -> AppConfig:
         ),
         kokoro=KokoroConfig(
             voice=raw_config.get("kokoro", {}).get("voice", "af_heart"),
+            lang_code=raw_config.get("kokoro", {}).get("lang_code", "en"),
             speed=float(raw_config.get("kokoro", {}).get("speed", 1.0)),
             emotion=raw_config.get("kokoro", {}).get("emotion", "neutral"),
             output_dir=raw_config.get("kokoro", {}).get("output_dir", "tts_output"),

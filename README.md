@@ -51,13 +51,13 @@ The bot runs on both Linux (Debian/Ubuntu) and Windows 10/11/Server. Use the pla
    # On Windows (PowerShell): Copy-Item config.example.yaml config.yaml
    ```
 
-   Update the Discord token, Ollama model name (for example `llama3`, `mistral`, or any Hugging Face model served by Ollama), speech-to-text paths, and Kokoro voice.
+   Update the Discord token, Ollama model name (for example `llama3`, `mistral`, or any Hugging Face model served by Ollama), speech-to-text paths, and Kokoro voice/language settings.
 
 4. Download or generate the models referenced in the configuration:
 
    - **Ollama**: `ollama pull mistral` (or your preferred Hugging Face model)
-   - **Faster-Whisper**: download the model directory into `models/faster-whisper-medium` (or another path referenced in `config.yaml`)
-   - **Kokoro**: follow the [Kokoro project](https://github.com/hexgrad/kokoro) instructions to place the pipeline weights in an accessible location. Reference the [VOICES.md table on Hugging Face](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md) for valid speaker IDs.
+   - **Faster-Whisper**: run `python scripts/download_faster_whisper.py medium` to fetch the Medium checkpoint into `models/faster-whisper-medium` (pass a destination path as the second argument to change the location). Other sizes such as `small` or `large-v3` are supported—match the value you set in `config.yaml`.
+   - **Kokoro**: follow the [Kokoro project](https://github.com/hexgrad/kokoro) instructions to place the pipeline weights in an accessible location. Reference the [VOICES.md table on Hugging Face](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md) for valid speaker IDs and set `kokoro.lang_code` to a supported language (for example `en`, `ja`, or `zh`).
 
 5. Run the bot:
 

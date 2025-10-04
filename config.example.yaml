@@ -43,6 +43,7 @@ stt:
 
 kokoro:
   voice: "af_heart"  # Valid voice IDs: https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md
+  lang_code: "en"  # Language code required by Kokoro (e.g., en, ja, zh)
   speed: 1.0
   emotion: "neutral"
   output_dir: "tts_output"

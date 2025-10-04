@@ -46,13 +46,13 @@ cp config.example.yaml config.yaml
 nano config.yaml
 ```
 
-Update the Discord bot token, local model paths, and any voice or logging preferences.
+Update the Discord bot token, local model paths, and any voice/language or logging preferences.
 
 ## 6. Prepare local AI services
 
 - **Ollama**: Install the [Linux release](https://ollama.ai/download) and run `ollama pull mistral` (or your preferred model).
-- **Faster-Whisper**: Download the desired model directory to the path referenced in `config.yaml` (for example `models/faster-whisper-medium`).
-- **Kokoro voices**: Follow the [Kokoro instructions](https://github.com/hexgrad/kokoro) to download voices locally. Make sure the `voice` value in `config.yaml` matches an installed voice ID.
+- **Faster-Whisper**: Run `python scripts/download_faster_whisper.py medium` to place the Medium checkpoint in `models/faster-whisper-medium` (replace `medium` with the size you configured, or add a custom destination as the second argument).
+- **Kokoro voices**: Follow the [Kokoro instructions](https://github.com/hexgrad/kokoro) to download voices locally. Make sure the `voice` value in `config.yaml` matches an installed voice ID and that `kokoro.lang_code` reflects a supported language (for example `en`, `ja`, or `zh`).
 
 ## 7. Launch the bot
 
