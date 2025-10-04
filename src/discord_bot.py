@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Dict, Optional
 
@@ -33,6 +34,9 @@ class DiscordAssistantBot(commands.Bot):
         self.voice_session = voice_session
         self._status_index = 0
         self._wake_cooldowns: Dict[int, float] = {}
+        wake_tokens = [token for token in re.split(r"\s+", config.discord.wake_word.strip()) if token]
+        pattern = r"\W+".join(re.escape(token) for token in wake_tokens) if wake_tokens else re.escape(config.discord.wake_word)
+        self._wake_word_regex = re.compile(rf"(?<!\w){pattern}(?:\W+|$)", re.IGNORECASE)
         self.status_rotator = tasks.loop(seconds=config.discord.status_rotation_seconds)(self.rotate_status)
         self._register_commands()
 
@@ -150,15 +154,14 @@ class DiscordAssistantBot(commands.Bot):
         await self.process_commands(message)
         if message.content.startswith(self.command_prefix):
             return
-        content_lower = message.content.lower()
-        if self.config_data.discord.wake_word not in content_lower:
+        if not self._wake_word_regex.search(message.content):
             return
         now = time.monotonic()
         last = self._wake_cooldowns.get(message.channel.id, 0.0)
         if now - last < self.config_data.discord.wake_word_cooldown_seconds:
             return
         self._wake_cooldowns[message.channel.id] = now
-        cleaned = message.content.lower().replace(self.config_data.discord.wake_word, "").strip()
+        cleaned = self._wake_word_regex.sub("", message.content, count=1).strip()
         prompt = cleaned or message.content
         reply = await self.conversation_manager.generate_reply(message.channel.id, prompt)
         await self._send_reply(message, reply)
