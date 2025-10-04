@@ -53,6 +53,7 @@ class DiscordAssistantBot(commands.Bot):
         if not hasattr(self, "tree"):
             self.tree = app_commands.CommandTree(self)
         self._status_index = 0
+        self._commands_synced = False
         self._voice_states: Dict[int, WakeConversationState] = {}
         self._wake_cooldowns: Dict[int, float] = {}
         wake_tokens = [token for token in re.split(r"\s+", config.discord.wake_word.strip()) if token]
@@ -62,6 +63,15 @@ class DiscordAssistantBot(commands.Bot):
         self._register_commands()
 
     async def setup_hook(self) -> None:
+        await self._sync_application_commands()
+
+    async def on_ready(self) -> None:  # pragma: no cover - requires Discord runtime
+        await self._sync_application_commands()
+
+    async def _sync_application_commands(self) -> None:
+        if self._commands_synced:
+            return
+
         if self.config_data.discord.guild_ids:
             for guild_id in self.config_data.discord.guild_ids:
                 guild = discord.Object(id=guild_id)
@@ -69,6 +79,8 @@ class DiscordAssistantBot(commands.Bot):
                 await self.tree.sync(guild=guild)
         else:
             await self.tree.sync()
+
+        self._commands_synced = True
 
     def _register_commands(self) -> None:
         @self.tree.command(name="reset", description="Clear the assistant conversation history for this channel")
