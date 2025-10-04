@@ -10,12 +10,13 @@ from .ai.stt import SpeechToText
 from .ai.tts import TextToSpeech
 from .ai.voice_session import VoiceSession
 from .config import AppConfig, load_config
-from .logging_utils import configure_logging
+from .logging_utils import configure_logging, get_logger
 from .preflight import run_preflight_checks
 
 
 async def run_bot(config: AppConfig) -> None:
     configure_logging(config.logging)
+    logger = get_logger(__name__)
     ollama_client = OllamaClient(config.ollama)
     try:
         await run_preflight_checks(config, ollama_client)
@@ -31,6 +32,14 @@ async def run_bot(config: AppConfig) -> None:
     bot = create_bot(config, conversation_manager, voice_session)
     try:
         await bot.start(config.discord.token)
+    except asyncio.CancelledError:
+        logger.info("Shutdown requested, closing Discord client.")
+        await bot.close()
+        raise
+    except Exception:
+        logger.exception("Discord client stopped unexpectedly.")
+        await bot.close()
+        raise
     finally:
         await ollama_client.close()
 
@@ -49,7 +58,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    asyncio.run(run_bot(config))
+    try:
+        asyncio.run(run_bot(config))
+    except KeyboardInterrupt:
+        logger = get_logger(__name__)
+        logger.info("Received keyboard interrupt. Shutting down cleanly.")
 
 
 if __name__ == "__main__":
