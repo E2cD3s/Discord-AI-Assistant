@@ -130,7 +130,11 @@ class DiscordAssistantBot(commands.Bot):
             description="Ask the assistant a question",
             **slash_kwargs,
         )
-        @discord.option("question", description="The question you want to ask the assistant")
+        @discord.option(
+            "question",
+            str,
+            description="The question you want to ask the assistant",
+        )
         async def ask_command(ctx: discord.ApplicationContext, question: str) -> None:
             await ask_handler(ctx.interaction, question)
 
@@ -183,7 +187,11 @@ class DiscordAssistantBot(commands.Bot):
             description="Have the assistant speak in the connected voice channel",
             **slash_kwargs,
         )
-        @discord.option("text", description="What you want the assistant to say")
+        @discord.option(
+            "text",
+            str,
+            description="What you want the assistant to say",
+        )
         async def say_command(ctx: discord.ApplicationContext, text: str) -> None:
             interaction = ctx.interaction
             voice_client = getattr(interaction.guild, "voice_client", None)
