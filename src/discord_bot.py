@@ -203,6 +203,16 @@ class DiscordAssistantBot(commands.Bot):
                     if name in annotations:
                         annotations[name] = value
 
+            option_decorator = getattr(discord, "option", None)
+
+            def apply_option_decorator(func: Any, name: str, description: str) -> Any:
+                if not callable(option_decorator):
+                    return func
+                try:
+                    return option_decorator(name, description=description)(func)
+                except TypeError:
+                    return option_decorator(name, str, description=description)(func)
+
             reset_decorator = self.slash_command(
                 name="reset",
                 description="Clear the assistant conversation history for this channel",
@@ -214,26 +224,7 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await reset_handler(interaction)
 
-            option_decorator = getattr(discord, "option", None)
-
-            def decorate_question_option(func: Any) -> Any:
-                if callable(option_decorator):
-                    return option_decorator(
-                        "question",
-                        description="The question you want to ask the assistant",
-                    )(func)
-                return func
-            option_factory = getattr(discord, "Option", None)
-            option_is_callable = callable(option_factory)
-
-            question_parameter = (
-                option_factory(
-                    str,
-                    "The question you want to ask the assistant",
-                )
-                if option_is_callable
-                else str
-            )
+            normalize_pycord_annotations(reset_command)
 
             ask_decorator = self.slash_command(
                 name="ask",
@@ -242,13 +233,17 @@ class DiscordAssistantBot(commands.Bot):
             )
 
             @ask_decorator
-            @decorate_question_option
             async def ask_command(
-                ctx: discord.ApplicationContext, question: question_parameter
+                ctx: discord.ApplicationContext, question: str
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await ask_handler(interaction, question)
 
+            ask_command = apply_option_decorator(
+                ask_command,
+                "question",
+                "The question you want to ask the assistant",
+            )
             normalize_pycord_annotations(ask_command, {"question": str})
 
             join_decorator = self.slash_command(
@@ -275,21 +270,7 @@ class DiscordAssistantBot(commands.Bot):
                 interaction = getattr(ctx, "interaction", ctx)
                 await leave_handler(interaction)
 
-            def decorate_text_option(func: Any) -> Any:
-                if callable(option_decorator):
-                    return option_decorator(
-                        "text",
-                        description="What you want the assistant to say",
-                    )(func)
-                return func
-            text_parameter = (
-                option_factory(
-                    str,
-                    "What you want the assistant to say",
-                )
-                if option_is_callable
-                else str
-            )
+            normalize_pycord_annotations(leave_command)
 
             say_decorator = self.slash_command(
                 name="say",
@@ -298,13 +279,17 @@ class DiscordAssistantBot(commands.Bot):
             )
 
             @say_decorator
-            @decorate_text_option
             async def say_command(
-                ctx: discord.ApplicationContext, text: text_parameter
+                ctx: discord.ApplicationContext, text: str
             ) -> None:
                 interaction = getattr(ctx, "interaction", ctx)
                 await say_handler(interaction, text)
 
+            say_command = apply_option_decorator(
+                say_command,
+                "text",
+                "What you want the assistant to say",
+            )
             normalize_pycord_annotations(say_command, {"text": str})
 
             status_decorator = self.slash_command(
