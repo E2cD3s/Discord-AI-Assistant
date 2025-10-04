@@ -75,7 +75,11 @@ class DiscordAssistantBot(commands.Bot):
         @app_commands.allowed_installs(guilds=True, users=False)
         @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def reset_conversation(interaction: discord.Interaction) -> None:
-            await self.conversation_manager.reset(interaction.channel_id)
+            try:
+                await self._reset_channel(interaction.channel_id)
+            except RuntimeError as exc:
+                await interaction.response.send_message(str(exc), ephemeral=True)
+                return
             await interaction.response.send_message("Conversation history cleared for this channel.")
 
         @self.tree.command(name="ask", description="Ask the assistant a question")
@@ -84,7 +88,11 @@ class DiscordAssistantBot(commands.Bot):
         @app_commands.allowed_contexts(guilds=True, dms=False, private_channels=False)
         async def ask(interaction: discord.Interaction, question: str) -> None:
             await interaction.response.defer(thinking=True)
-            reply = await self.conversation_manager.generate_reply(interaction.channel_id, question)
+            try:
+                reply = await self._ask_channel(interaction.channel_id, question)
+            except RuntimeError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
             await interaction.followup.send(reply)
 
         @self.tree.command(name="join", description="Summon the assistant to your current voice channel")
@@ -139,20 +147,93 @@ class DiscordAssistantBot(commands.Bot):
 
         @self.tree.command(name="status", description="Show configuration details for the assistant")
         async def status_command(interaction: discord.Interaction) -> None:
-            embed = discord.Embed(title="Assistant Status", color=discord.Color.blurple())
-            embed.add_field(name="Model", value=self.config_data.ollama.model, inline=False)
-            embed.add_field(name="Wake Word", value=self.config_data.discord.wake_word, inline=False)
-            embed.add_field(
-                name="History Turns",
-                value=str(self.config_data.conversation.history_turns),
-                inline=False,
+            await interaction.response.send_message(embed=self._build_status_embed())
+
+        @self.command(name="reset", help="Clear the assistant conversation history for this channel")
+        async def reset_command(ctx: commands.Context) -> None:
+            try:
+                await self._reset_channel(ctx.channel.id if ctx.channel else None)
+            except RuntimeError as exc:
+                await ctx.send(str(exc))
+                return
+            await ctx.send("Conversation history cleared for this channel.")
+
+        @self.command(name="ask", help="Ask the assistant a question")
+        async def ask_command(ctx: commands.Context, *, question: str) -> None:
+            async with ctx.typing():
+                try:
+                    reply = await self._ask_channel(ctx.channel.id if ctx.channel else None, question)
+                except RuntimeError as exc:
+                    await ctx.send(str(exc))
+                    return
+            await ctx.send(reply)
+
+        @self.command(name="join", help="Summon the assistant to your current voice channel")
+        async def join_command(ctx: commands.Context) -> None:
+            try:
+                voice_client = await self.voice_session.join(ctx)
+            except RuntimeError as exc:
+                await ctx.send(str(exc))
+                return
+
+            await self._initialize_voice_state(voice_client, ctx.channel.id if ctx.channel else None)
+
+            async def on_transcription(user: discord.abc.User, transcript: str) -> None:
+                await self._handle_transcription(voice_client, user, transcript)
+
+            await self.voice_session.start_listening(
+                voice_client,
+                on_transcription,
+                timeout=5.0,
             )
-            embed.add_field(
-                name="Status Rotation",
-                value=f"{self.config_data.discord.status_rotation_seconds}s",
-                inline=False,
-            )
-            await interaction.response.send_message(embed=embed)
+            await ctx.send(f"Joined voice channel {voice_client.channel.name}.")
+
+        @self.command(name="leave", help="Disconnect the assistant from the voice channel")
+        async def leave_command(ctx: commands.Context) -> None:
+            voice_client = getattr(ctx.guild, "voice_client", None) if ctx.guild else None
+            if voice_client and voice_client.channel:
+                await self._cleanup_voice_state(voice_client.channel.id)
+            await self.voice_session.leave(ctx)
+            await ctx.send("Disconnected from voice channel.")
+
+        @self.command(name="say", help="Have the assistant speak in the connected voice channel")
+        async def say_command(ctx: commands.Context, *, text: str) -> None:
+            voice_client = getattr(ctx.guild, "voice_client", None) if ctx.guild else None
+            if not voice_client:
+                await ctx.send("I need to be in a voice channel to speak. Use the !join command first.")
+                return
+            await self.voice_session.speak(voice_client, text)
+            await ctx.send("Playing synthesized speech.")
+
+        @self.command(name="status", help="Show configuration details for the assistant")
+        async def status_prefix(ctx: commands.Context) -> None:
+            await ctx.send(embed=self._build_status_embed())
+
+    async def _reset_channel(self, channel_id: Optional[int]) -> None:
+        if channel_id is None:
+            raise RuntimeError("Unable to determine which channel to reset.")
+        await self.conversation_manager.reset(channel_id)
+
+    async def _ask_channel(self, channel_id: Optional[int], question: str) -> str:
+        if channel_id is None:
+            raise RuntimeError("Unable to determine which channel to answer in.")
+        return await self.conversation_manager.generate_reply(channel_id, question)
+
+    def _build_status_embed(self) -> discord.Embed:
+        embed = discord.Embed(title="Assistant Status", color=discord.Color.blurple())
+        embed.add_field(name="Model", value=self.config_data.ollama.model, inline=False)
+        embed.add_field(name="Wake Word", value=self.config_data.discord.wake_word, inline=False)
+        embed.add_field(
+            name="History Turns",
+            value=str(self.config_data.conversation.history_turns),
+            inline=False,
+        )
+        embed.add_field(
+            name="Status Rotation",
+            value=f"{self.config_data.discord.status_rotation_seconds}s",
+            inline=False,
+        )
+        return embed
 
     async def _initialize_voice_state(
         self, voice_client: discord.VoiceClient, text_channel_id: Optional[int]
