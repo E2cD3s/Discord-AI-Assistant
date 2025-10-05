@@ -79,10 +79,18 @@ class VoiceSession:
                 await voice_client.disconnect(force=True)
             with suppress(Exception):
                 voice_client.cleanup()
+            # When the underlying websocket session is invalidated (e.g. close code 4006)
+            # py-cord can leave a stale voice client reference attached to the guild. This
+            # prevents fresh voice connections from being created and results in repeated
+            # invalid session errors. Explicitly clear the cached reference so that the
+            # next connection attempt starts from a clean slate.
+            with suppress(Exception):
+                if getattr(guild, "voice_client", None) is voice_client:
+                    setattr(guild, "_voice_client", None)
 
         async def _connect() -> discord.VoiceClient:
             last_error: RuntimeError | None = None
-            attempts = (True, False, False)
+            attempts = (False, False, False)
             for reconnect in attempts:
                 try:
                     return await channel.connect(reconnect=reconnect)

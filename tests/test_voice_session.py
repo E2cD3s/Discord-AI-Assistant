@@ -46,7 +46,7 @@ def test_join_retries_with_fresh_voice_session_when_invalidated(monkeypatch):
     voice_client = _EVENT_LOOP.run_until_complete(session.join(ctx))
 
     assert isinstance(voice_client, _DummyVoiceClient)
-    assert connect_calls == [True, False]
+    assert connect_calls == [False]
 
 
 def test_join_raises_helpful_error_when_voice_gateway_closes(monkeypatch):
