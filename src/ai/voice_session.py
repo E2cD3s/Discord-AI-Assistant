@@ -119,8 +119,9 @@ class VoiceSession:
 
             async def _connect() -> discord.VoiceClient:
                 last_error: RuntimeError | None = None
-                attempts = (False, False, False)
-                for reconnect in attempts:
+                max_attempts = 4
+                for attempt in range(1, max_attempts + 1):
+                    reconnect = False
                     try:
                         return await channel.connect(reconnect=reconnect)
                     except discord.errors.ConnectionClosed as exc:
@@ -135,7 +136,9 @@ class VoiceSession:
                                 "Try re-running the join command if the issue persists."
                             )
                             await _cleanup_failed_connection()
-                            await asyncio.sleep(1)
+                            if attempt < max_attempts:
+                                backoff = min(5.0, 2 ** (attempt - 1))
+                                await asyncio.sleep(backoff)
                             continue
                         last_error = RuntimeError(
                             "Discord closed the voice connection unexpectedly "
