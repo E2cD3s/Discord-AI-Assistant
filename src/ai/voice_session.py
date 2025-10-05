@@ -60,7 +60,46 @@ class VoiceSession:
                 return voice_client
             await voice_client.move_to(channel)
             return voice_client
-        return await channel.connect()
+        if not bool(getattr(discord.voice_client, "has_nacl", False)):
+            raise RuntimeError(
+                "Voice connections require the PyNaCl dependency. "
+                "Install 'pynacl' and ensure the voice extra is enabled for py-cord."
+            )
+        async def _connect() -> discord.VoiceClient:
+            last_error: RuntimeError | None = None
+            for reconnect in (True, False):
+                try:
+                    return await channel.connect(reconnect=reconnect)
+                except discord.errors.ConnectionClosed as exc:
+                    close_code = getattr(exc, "code", None)
+                    if close_code == 4006:
+                        if reconnect:
+                            _LOGGER.warning(
+                                "Voice websocket session invalidated with close code 4006. "
+                                "Retrying with a fresh voice connection."
+                            )
+                            continue
+                        last_error = RuntimeError(
+                            "Discord invalidated the voice websocket (close code 4006) after "
+                            "retrying with a fresh connection. Try re-running the join command."
+                        )
+                    else:
+                        last_error = RuntimeError(
+                            "Discord closed the voice connection unexpectedly "
+                            f"(close code {close_code or 'unknown'}). "
+                            "Try running the join command again or restart the bot."
+                        )
+                    raise last_error from exc
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    last_error = RuntimeError("Failed to connect to the voice channel")
+                    raise last_error from exc
+
+            if last_error is not None:
+                raise last_error
+
+            raise RuntimeError("Failed to connect to the voice channel")
+
+        return await _connect()
 
     async def leave(
         self,
