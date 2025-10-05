@@ -71,22 +71,40 @@ class VoiceSession:
             if guild is None:
                 return
 
+            state = getattr(guild, "_state", None)
+
             voice_client = getattr(guild, "voice_client", None)
-            if not voice_client:
-                return
+            if voice_client is None and state is not None:
+                getter = getattr(state, "_get_voice_client", None)
+                if callable(getter):
+                    with suppress(Exception):
+                        voice_client = getter(getattr(guild, "id", None))
+
+            if voice_client is not None:
+                with suppress(Exception):
+                    await voice_client.disconnect(force=True)
+                with suppress(Exception):
+                    voice_client.cleanup()
+
+            if state is not None:
+                remover = getattr(state, "_remove_voice_client", None)
+                if callable(remover):
+                    with suppress(Exception):
+                        remover(getattr(guild, "id", None))
+
+            bot_member = getattr(guild, "me", None)
+            voice_states = getattr(guild, "_voice_states", None)
+            if bot_member is not None and isinstance(voice_states, dict):
+                with suppress(Exception):
+                    voice_states.pop(bot_member.id, None)
+
+            change_voice_state = getattr(guild, "change_voice_state", None)
+            if callable(change_voice_state):
+                with suppress(Exception):
+                    await change_voice_state(channel=None)
 
             with suppress(Exception):
-                await voice_client.disconnect(force=True)
-            with suppress(Exception):
-                voice_client.cleanup()
-            # When the underlying websocket session is invalidated (e.g. close code 4006)
-            # py-cord can leave a stale voice client reference attached to the guild. This
-            # prevents fresh voice connections from being created and results in repeated
-            # invalid session errors. Explicitly clear the cached reference so that the
-            # next connection attempt starts from a clean slate.
-            with suppress(Exception):
-                if getattr(guild, "voice_client", None) is voice_client:
-                    setattr(guild, "_voice_client", None)
+                setattr(guild, "_voice_client", None)
 
         async def _connect() -> discord.VoiceClient:
             last_error: RuntimeError | None = None
@@ -113,6 +131,23 @@ class VoiceSession:
                         f"(close code {close_code or 'unknown'}). "
                         "Try running the join command again or restart the bot."
                     )
+                    raise last_error from exc
+                except discord.ClientException as exc:
+                    message = str(exc)
+                    if "Already connected" in message or "connect to voice" in message:
+                        _LOGGER.warning(
+                            "Voice client reported an invalid connection state (%s). "
+                            "Attempting to reset the cached session before retrying.",
+                            message,
+                        )
+                        last_error = RuntimeError(
+                            "Discord reported a stale voice connection. "
+                            "Retrying with a fresh session."
+                        )
+                        await _cleanup_failed_connection()
+                        await asyncio.sleep(1)
+                        continue
+                    last_error = RuntimeError("Failed to connect to the voice channel")
                     raise last_error from exc
                 except Exception as exc:  # pragma: no cover - defensive guard
                     last_error = RuntimeError("Failed to connect to the voice channel")

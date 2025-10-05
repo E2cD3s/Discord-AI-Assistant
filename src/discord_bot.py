@@ -16,6 +16,7 @@ from .config import AppConfig
 from .logging_utils import get_logger
 
 _InteractionResponded = getattr(discord, "InteractionResponded", RuntimeError)
+_NotFound = getattr(getattr(discord, "errors", discord), "NotFound", RuntimeError)
 
 _LOGGER = get_logger(__name__)
 
@@ -200,6 +201,7 @@ class DiscordAssistantBot(commands.Bot):
         )
         async def join_command(ctx: discord.ApplicationContext) -> None:
             interaction = ctx.interaction
+            await self._defer_interaction(interaction)
             try:
                 voice_client, _ = await self._ensure_voice_connection(
                     ctx,
@@ -411,8 +413,11 @@ class DiscordAssistantBot(commands.Bot):
         async def _send_via_followup() -> bool:
             if followup is None or not hasattr(followup, "send"):
                 return False
-            await followup.send(**kwargs, ephemeral=ephemeral)
-            return True
+            try:
+                await followup.send(**kwargs, ephemeral=ephemeral)
+                return True
+            except _NotFound:
+                return False
 
         if prefer_followup:
             if await _send_via_followup():
@@ -428,7 +433,7 @@ class DiscordAssistantBot(commands.Bot):
                 try:
                     await send_message(ephemeral=ephemeral, **kwargs)
                     return
-                except _InteractionResponded:
+                except (_InteractionResponded, _NotFound):
                     if await _send_via_followup():
                         return
 
