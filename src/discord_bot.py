@@ -99,18 +99,15 @@ class DiscordAssistantBot(commands.Bot):
                 interaction, "Conversation history cleared for this channel."
             )
 
-        async def ask_handler(interaction: discord.Interaction, question: str) -> None:
+        async def ask_handler(interaction: discord.Interaction, question: str) -> str | None:
             await self._defer_interaction(interaction)
             try:
-                reply = await self._ask_channel(interaction.channel_id, question)
+                return await self._ask_channel(interaction.channel_id, question)
             except RuntimeError as exc:
                 await self._send_interaction_message(
                     interaction, str(exc), ephemeral=True, prefer_followup=True
                 )
-                return
-            await self._send_interaction_message(
-                interaction, reply, prefer_followup=True
-            )
+                return None
 
         async def status_handler(interaction: discord.Interaction) -> None:
             await self._send_interaction_message(
@@ -125,18 +122,76 @@ class DiscordAssistantBot(commands.Bot):
         async def reset_command(ctx: discord.ApplicationContext) -> None:
             await reset_handler(ctx.interaction)
 
-        @self.slash_command(
-            name="ask",
-            description="Ask the assistant a question",
+        ask_group = discord.SlashCommandGroup(
+            "ask",
+            "Ask the assistant a question",
             **slash_kwargs,
+        )
+
+        @ask_group.command(
+            name="text",
+            description="Ask the assistant a question and receive a text reply",
         )
         @discord.option(
             "question",
             str,
             description="The question you want to ask the assistant",
         )
-        async def ask_command(ctx: discord.ApplicationContext, question: str) -> None:
-            await ask_handler(ctx.interaction, question)
+        async def ask_text_command(ctx: discord.ApplicationContext, question: str) -> None:
+            reply = await ask_handler(ctx.interaction, question)
+            if reply is None:
+                return
+            await self._send_interaction_message(
+                ctx.interaction, reply, prefer_followup=True
+            )
+
+        @ask_group.command(
+            name="voice",
+            description="Ask the assistant a question and hear the reply in voice",
+        )
+        @discord.option(
+            "question",
+            str,
+            description="The question you want to ask the assistant",
+        )
+        async def ask_voice_command(
+            ctx: discord.ApplicationContext, question: str
+        ) -> None:
+            interaction = ctx.interaction
+            reply = await ask_handler(interaction, question)
+            if reply is None:
+                return
+            try:
+                voice_client, _ = await self._ensure_voice_connection(
+                    ctx,
+                    text_channel_id=interaction.channel_id,
+                    start_listening=True,
+                )
+            except RuntimeError as exc:
+                await self._send_interaction_message(
+                    interaction, str(exc), ephemeral=True, prefer_followup=True
+                )
+                return
+
+            try:
+                await self.voice_session.speak(voice_client, reply)
+            except Exception:
+                _LOGGER.exception("Failed to play synthesized speech for voice ask")
+                await self._send_interaction_message(
+                    interaction,
+                    "Unable to play synthesized speech in the voice channel.",
+                    ephemeral=True,
+                    prefer_followup=True,
+                )
+                return
+
+            await self._send_interaction_message(
+                interaction,
+                reply,
+                prefer_followup=True,
+            )
+
+        self.add_application_command(ask_group)
 
         @self.slash_command(
             name="join",
@@ -146,23 +201,16 @@ class DiscordAssistantBot(commands.Bot):
         async def join_command(ctx: discord.ApplicationContext) -> None:
             interaction = ctx.interaction
             try:
-                voice_client = await self.voice_session.join(ctx)
+                voice_client, _ = await self._ensure_voice_connection(
+                    ctx,
+                    text_channel_id=interaction.channel_id,
+                    start_listening=True,
+                )
             except RuntimeError as exc:
                 await self._send_interaction_message(
                     interaction, str(exc), ephemeral=True
                 )
                 return
-
-            await self._initialize_voice_state(voice_client, interaction.channel_id)
-
-            async def on_transcription(user: discord.abc.User, transcript: str) -> None:
-                await self._handle_transcription(voice_client, user, transcript)
-
-            await self.voice_session.start_listening(
-                voice_client,
-                on_transcription,
-                timeout=5.0,
-            )
             await self._send_interaction_message(
                 interaction, f"Joined voice channel {voice_client.channel.name}."
             )
@@ -195,13 +243,20 @@ class DiscordAssistantBot(commands.Bot):
         async def say_command(ctx: discord.ApplicationContext, text: str) -> None:
             interaction = ctx.interaction
             voice_client = getattr(interaction.guild, "voice_client", None)
-            if not voice_client:
-                await self._send_interaction_message(
-                    interaction,
-                    "I need to be in a voice channel to speak. Use the /join command first.",
-                    ephemeral=True,
-                )
-                return
+            if not voice_client or not getattr(voice_client, "channel", None):
+                try:
+                    voice_client, _ = await self._ensure_voice_connection(
+                        ctx,
+                        text_channel_id=interaction.channel_id,
+                        start_listening=True,
+                    )
+                except RuntimeError as exc:
+                    await self._send_interaction_message(
+                        interaction,
+                        str(exc),
+                        ephemeral=True,
+                    )
+                    return
             await self.voice_session.speak(voice_client, text)
             await self._send_interaction_message(
                 interaction, "Playing synthesized speech."
@@ -278,6 +333,46 @@ class DiscordAssistantBot(commands.Bot):
         @self.command(name="status", help="Show configuration details for the assistant")
         async def status_prefix(ctx: commands.Context) -> None:
             await ctx.send(embed=self._build_status_embed())
+
+    async def _ensure_voice_connection(
+        self,
+        ctx: discord.ApplicationContext | commands.Context,
+        *,
+        text_channel_id: Optional[int],
+        start_listening: bool = False,
+    ) -> tuple[discord.VoiceClient, bool]:
+        guild = getattr(ctx, "guild", None)
+        voice_client = (
+            getattr(guild, "voice_client", None)
+            if guild is not None
+            else getattr(ctx, "voice_client", None)
+        )
+        connected_channel = getattr(voice_client, "channel", None) if voice_client else None
+        joined = False
+
+        if voice_client is None or connected_channel is None:
+            voice_client = await self.voice_session.join(ctx)
+            connected_channel = getattr(voice_client, "channel", None)
+            joined = True
+
+        if connected_channel is None:
+            raise RuntimeError("Unable to determine the connected voice channel.")
+
+        if joined:
+            await self._initialize_voice_state(voice_client, text_channel_id)
+
+        if start_listening:
+
+            async def on_transcription(user: discord.abc.User, transcript: str) -> None:
+                await self._handle_transcription(voice_client, user, transcript)
+
+            await self.voice_session.start_listening(
+                voice_client,
+                on_transcription,
+                timeout=5.0,
+            )
+
+        return voice_client, joined
 
     async def _defer_interaction(self, interaction: discord.Interaction) -> None:
         response = getattr(interaction, "response", None)

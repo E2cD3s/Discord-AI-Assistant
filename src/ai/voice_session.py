@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
@@ -65,30 +66,45 @@ class VoiceSession:
                 "Voice connections require the PyNaCl dependency. "
                 "Install 'pynacl' and ensure the voice extra is enabled for py-cord."
             )
+        async def _cleanup_failed_connection() -> None:
+            guild = getattr(channel, "guild", None)
+            if guild is None:
+                return
+
+            voice_client = getattr(guild, "voice_client", None)
+            if not voice_client:
+                return
+
+            with suppress(Exception):
+                await voice_client.disconnect(force=True)
+            with suppress(Exception):
+                voice_client.cleanup()
+
         async def _connect() -> discord.VoiceClient:
             last_error: RuntimeError | None = None
-            for reconnect in (True, False):
+            attempts = (True, False, False)
+            for reconnect in attempts:
                 try:
                     return await channel.connect(reconnect=reconnect)
                 except discord.errors.ConnectionClosed as exc:
                     close_code = getattr(exc, "code", None)
                     if close_code == 4006:
-                        if reconnect:
-                            _LOGGER.warning(
-                                "Voice websocket session invalidated with close code 4006. "
-                                "Retrying with a fresh voice connection."
-                            )
-                            continue
-                        last_error = RuntimeError(
-                            "Discord invalidated the voice websocket (close code 4006) after "
-                            "retrying with a fresh connection. Try re-running the join command."
+                        _LOGGER.warning(
+                            "Voice websocket session invalidated with close code 4006. "
+                            "Attempting to establish a fresh voice connection."
                         )
-                    else:
                         last_error = RuntimeError(
-                            "Discord closed the voice connection unexpectedly "
-                            f"(close code {close_code or 'unknown'}). "
-                            "Try running the join command again or restart the bot."
+                            "Discord invalidated the voice websocket (close code 4006). "
+                            "Try re-running the join command if the issue persists."
                         )
+                        await _cleanup_failed_connection()
+                        await asyncio.sleep(1)
+                        continue
+                    last_error = RuntimeError(
+                        "Discord closed the voice connection unexpectedly "
+                        f"(close code {close_code or 'unknown'}). "
+                        "Try running the join command again or restart the bot."
+                    )
                     raise last_error from exc
                 except Exception as exc:  # pragma: no cover - defensive guard
                     last_error = RuntimeError("Failed to connect to the voice channel")
