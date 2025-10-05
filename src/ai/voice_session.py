@@ -82,7 +82,14 @@ class VoiceSession:
 
         async def _connect() -> discord.VoiceClient:
             last_error: RuntimeError | None = None
-            attempts = (True, False, False)
+            # Always request a fresh handshake when establishing a new voice
+            # connection. Allowing the Discord library to automatically
+            # reconnect (``reconnect=True``) can cause the websocket to try to
+            # resume a session that Discord has already invalidated, which
+            # manifests as close code 4006. By forcing ``reconnect=False`` we
+            # let the library tear down the failed attempt and we recreate the
+            # voice client on the next iteration instead.
+            attempts = (False, False, False)
             for reconnect in attempts:
                 try:
                     return await channel.connect(reconnect=reconnect)
@@ -98,7 +105,7 @@ class VoiceSession:
                             "Try re-running the join command if the issue persists."
                         )
                         await _cleanup_failed_connection()
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(2)
                         continue
                     last_error = RuntimeError(
                         "Discord closed the voice connection unexpectedly "
