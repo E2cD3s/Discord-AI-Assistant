@@ -82,7 +82,7 @@ class VoiceSession:
 
         async def _connect() -> discord.VoiceClient:
             last_error: RuntimeError | None = None
-            attempts = (True, False, False)
+            attempts = (False, False, False)
             for reconnect in attempts:
                 try:
                     return await channel.connect(reconnect=reconnect)

@@ -31,7 +31,7 @@ def test_join_retries_with_fresh_voice_session_when_invalidated(monkeypatch):
 
     async def fake_connect(*, reconnect: bool):
         connect_calls.append(reconnect)
-        if reconnect:
+        if len(connect_calls) == 1:
             raise discord.errors.ConnectionClosed(_DummySocket(), shard_id=None, code=4006)
         return _DummyVoiceClient(channel)
 
@@ -46,7 +46,7 @@ def test_join_retries_with_fresh_voice_session_when_invalidated(monkeypatch):
     voice_client = _EVENT_LOOP.run_until_complete(session.join(ctx))
 
     assert isinstance(voice_client, _DummyVoiceClient)
-    assert connect_calls == [True, False]
+    assert connect_calls == [False, False]
 
 
 def test_join_raises_helpful_error_when_voice_gateway_closes(monkeypatch):
