@@ -24,6 +24,11 @@ class _DummyVoiceClient:
 def test_join_retries_with_fresh_voice_session_when_invalidated(monkeypatch):
     monkeypatch.setattr(discord.voice_client, "has_nacl", True, raising=False)
 
+    async def _instant_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
     session = VoiceSession(SimpleNamespace(), SimpleNamespace())
 
     guild_state = SimpleNamespace(_voice_clients={}, _remove_voice_client=lambda guild_id: guild_state._voice_clients.pop(guild_id, None))
@@ -80,6 +85,11 @@ def test_join_raises_helpful_error_when_voice_gateway_closes(monkeypatch):
 def test_join_raises_after_reconnect_attempts_when_close_code_4006_persists(monkeypatch):
     monkeypatch.setattr(discord.voice_client, "has_nacl", True, raising=False)
 
+    async def _instant_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
     session = VoiceSession(SimpleNamespace(), SimpleNamespace())
 
     channel = SimpleNamespace(guild=SimpleNamespace())
@@ -103,6 +113,11 @@ def test_join_raises_after_reconnect_attempts_when_close_code_4006_persists(monk
 
 def test_join_clears_cached_voice_client_and_voice_state_after_4006(monkeypatch):
     monkeypatch.setattr(discord.voice_client, "has_nacl", True, raising=False)
+
+    async def _instant_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
 
     session = VoiceSession(SimpleNamespace(), SimpleNamespace())
 
