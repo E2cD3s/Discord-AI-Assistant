@@ -33,6 +33,7 @@ class VoiceSession:
         self._tts = tts
         self._active_recordings: Dict[int, asyncio.Task[None]] = {}
         self._listener_tasks: Dict[int, asyncio.Task[None]] = {}
+        self._connection_locks: Dict[int, asyncio.Lock] = {}
 
     def _voice_key(self, voice_client: discord.VoiceClient) -> int:
         guild = getattr(voice_client, "guild", None)
@@ -52,113 +53,123 @@ class VoiceSession:
         channel = getattr(voice_state, "channel", None) if voice_state else None
         if channel is None:
             raise RuntimeError("User must be in a voice channel to summon the bot.")
-        voice_client = getattr(ctx, "voice_client", None)
-        if voice_client is None:
-            guild = getattr(ctx, "guild", None)
-            voice_client = getattr(guild, "voice_client", None)
-        if voice_client:
-            if voice_client.channel.id == channel.id:
+        guild = getattr(channel, "guild", None)
+        guild_id = getattr(guild, "id", None) if guild else None
+        lock_key = guild_id if guild_id is not None else id(channel)
+        lock = self._connection_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._connection_locks[lock_key] = lock
+
+        async with lock:
+            voice_client = getattr(ctx, "voice_client", None)
+            if voice_client is None:
+                guild = getattr(ctx, "guild", None)
+                voice_client = getattr(guild, "voice_client", None)
+            if voice_client:
+                if voice_client.channel.id == channel.id:
+                    return voice_client
+                await voice_client.move_to(channel)
                 return voice_client
-            await voice_client.move_to(channel)
-            return voice_client
-        if not bool(getattr(discord.voice_client, "has_nacl", False)):
-            raise RuntimeError(
-                "Voice connections require the PyNaCl dependency. "
-                "Install 'pynacl' and ensure the voice extra is enabled for py-cord."
-            )
-        async def _cleanup_failed_connection() -> None:
-            guild = getattr(channel, "guild", None)
-            if guild is None:
-                return
+            if not bool(getattr(discord.voice_client, "has_nacl", False)):
+                raise RuntimeError(
+                    "Voice connections require the PyNaCl dependency. "
+                    "Install 'pynacl' and ensure the voice extra is enabled for py-cord."
+                )
 
-            state = getattr(guild, "_state", None)
+            async def _cleanup_failed_connection() -> None:
+                guild = getattr(channel, "guild", None)
+                if guild is None:
+                    return
 
-            voice_client = getattr(guild, "voice_client", None)
-            if voice_client is None and state is not None:
-                getter = getattr(state, "_get_voice_client", None)
-                if callable(getter):
+                state = getattr(guild, "_state", None)
+
+                voice_client = getattr(guild, "voice_client", None)
+                if voice_client is None and state is not None:
+                    getter = getattr(state, "_get_voice_client", None)
+                    if callable(getter):
+                        with suppress(Exception):
+                            voice_client = getter(getattr(guild, "id", None))
+
+                if voice_client is not None:
                     with suppress(Exception):
-                        voice_client = getter(getattr(guild, "id", None))
-
-            if voice_client is not None:
-                with suppress(Exception):
-                    await voice_client.disconnect(force=True)
-                with suppress(Exception):
-                    voice_client.cleanup()
-
-            if state is not None:
-                remover = getattr(state, "_remove_voice_client", None)
-                if callable(remover):
+                        await voice_client.disconnect(force=True)
                     with suppress(Exception):
-                        remover(getattr(guild, "id", None))
+                        voice_client.cleanup()
 
-            bot_member = getattr(guild, "me", None)
-            voice_states = getattr(guild, "_voice_states", None)
-            if bot_member is not None and isinstance(voice_states, dict):
+                if state is not None:
+                    remover = getattr(state, "_remove_voice_client", None)
+                    if callable(remover):
+                        with suppress(Exception):
+                            remover(getattr(guild, "id", None))
+
+                bot_member = getattr(guild, "me", None)
+                voice_states = getattr(guild, "_voice_states", None)
+                if bot_member is not None and isinstance(voice_states, dict):
+                    with suppress(Exception):
+                        voice_states.pop(bot_member.id, None)
+
+                change_voice_state = getattr(guild, "change_voice_state", None)
+                if callable(change_voice_state):
+                    with suppress(Exception):
+                        await change_voice_state(channel=None)
+
                 with suppress(Exception):
-                    voice_states.pop(bot_member.id, None)
+                    setattr(guild, "_voice_client", None)
 
-            change_voice_state = getattr(guild, "change_voice_state", None)
-            if callable(change_voice_state):
-                with suppress(Exception):
-                    await change_voice_state(channel=None)
-
-            with suppress(Exception):
-                setattr(guild, "_voice_client", None)
-
-        async def _connect() -> discord.VoiceClient:
-            last_error: RuntimeError | None = None
-            attempts = (False, False, False)
-            for reconnect in attempts:
-                try:
-                    return await channel.connect(reconnect=reconnect)
-                except discord.errors.ConnectionClosed as exc:
-                    close_code = getattr(exc, "code", None)
-                    if close_code == 4006:
-                        _LOGGER.warning(
-                            "Voice websocket session invalidated with close code 4006. "
-                            "Attempting to establish a fresh voice connection."
-                        )
+            async def _connect() -> discord.VoiceClient:
+                last_error: RuntimeError | None = None
+                attempts = (False, False, False)
+                for reconnect in attempts:
+                    try:
+                        return await channel.connect(reconnect=reconnect)
+                    except discord.errors.ConnectionClosed as exc:
+                        close_code = getattr(exc, "code", None)
+                        if close_code == 4006:
+                            _LOGGER.warning(
+                                "Voice websocket session invalidated with close code 4006. "
+                                "Attempting to establish a fresh voice connection."
+                            )
+                            last_error = RuntimeError(
+                                "Discord invalidated the voice websocket (close code 4006). "
+                                "Try re-running the join command if the issue persists."
+                            )
+                            await _cleanup_failed_connection()
+                            await asyncio.sleep(1)
+                            continue
                         last_error = RuntimeError(
-                            "Discord invalidated the voice websocket (close code 4006). "
-                            "Try re-running the join command if the issue persists."
+                            "Discord closed the voice connection unexpectedly "
+                            f"(close code {close_code or 'unknown'}). "
+                            "Try running the join command again or restart the bot."
                         )
-                        await _cleanup_failed_connection()
-                        await asyncio.sleep(1)
-                        continue
-                    last_error = RuntimeError(
-                        "Discord closed the voice connection unexpectedly "
-                        f"(close code {close_code or 'unknown'}). "
-                        "Try running the join command again or restart the bot."
-                    )
-                    raise last_error from exc
-                except discord.ClientException as exc:
-                    message = str(exc)
-                    if "Already connected" in message or "connect to voice" in message:
-                        _LOGGER.warning(
-                            "Voice client reported an invalid connection state (%s). "
-                            "Attempting to reset the cached session before retrying.",
-                            message,
-                        )
-                        last_error = RuntimeError(
-                            "Discord reported a stale voice connection. "
-                            "Retrying with a fresh session."
-                        )
-                        await _cleanup_failed_connection()
-                        await asyncio.sleep(1)
-                        continue
-                    last_error = RuntimeError("Failed to connect to the voice channel")
-                    raise last_error from exc
-                except Exception as exc:  # pragma: no cover - defensive guard
-                    last_error = RuntimeError("Failed to connect to the voice channel")
-                    raise last_error from exc
+                        raise last_error from exc
+                    except discord.ClientException as exc:
+                        message = str(exc)
+                        if "Already connected" in message or "connect to voice" in message:
+                            _LOGGER.warning(
+                                "Voice client reported an invalid connection state (%s). "
+                                "Attempting to reset the cached session before retrying.",
+                                message,
+                            )
+                            last_error = RuntimeError(
+                                "Discord reported a stale voice connection. "
+                                "Retrying with a fresh session."
+                            )
+                            await _cleanup_failed_connection()
+                            await asyncio.sleep(1)
+                            continue
+                        last_error = RuntimeError("Failed to connect to the voice channel")
+                        raise last_error from exc
+                    except Exception as exc:  # pragma: no cover - defensive guard
+                        last_error = RuntimeError("Failed to connect to the voice channel")
+                        raise last_error from exc
 
-            if last_error is not None:
-                raise last_error
+                if last_error is not None:
+                    raise last_error
 
-            raise RuntimeError("Failed to connect to the voice channel")
+                raise RuntimeError("Failed to connect to the voice channel")
 
-        return await _connect()
+            return await _connect()
 
     async def leave(
         self,

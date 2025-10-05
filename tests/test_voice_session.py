@@ -242,3 +242,44 @@ def test_join_recovers_from_client_exception_with_stale_connection(monkeypatch):
     assert disconnect_calls == [True]
     assert cleanup_calls == [None]
 
+
+def test_join_serializes_parallel_connection_attempts(monkeypatch):
+    monkeypatch.setattr(discord.voice_client, "has_nacl", True, raising=False)
+
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    guild_state = SimpleNamespace(_voice_clients={})
+
+    guild = SimpleNamespace(id=303, voice_client=None, _state=guild_state)
+    channel = SimpleNamespace(id=404, guild=guild)
+
+    connect_calls: list[bool] = []
+
+    async def fake_connect(*, reconnect: bool):
+        connect_calls.append(reconnect)
+        await asyncio.sleep(0)
+        voice_client = _DummyVoiceClient(channel)
+        guild.voice_client = voice_client
+        guild_state._voice_clients[guild.id] = voice_client
+        return voice_client
+
+    channel.connect = fake_connect  # type: ignore[assignment]
+
+    ctx = SimpleNamespace(
+        author=SimpleNamespace(voice=SimpleNamespace(channel=channel)),
+        voice_client=None,
+        guild=guild,
+    )
+
+    async def _attempt_join() -> _DummyVoiceClient:
+        result = await session.join(ctx)
+        assert isinstance(result, _DummyVoiceClient)
+        return result
+
+    first, second = _EVENT_LOOP.run_until_complete(
+        asyncio.gather(_attempt_join(), _attempt_join())
+    )
+
+    assert first is second
+    assert connect_calls == [False]
+
