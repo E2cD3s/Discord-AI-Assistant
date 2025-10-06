@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 import discord
 from discord.ext import commands
 
+from .discord_voice_compat import ensure_voice_recording_support
+
 try:  # pragma: no cover - optional dependency resolution
     from discord import sinks as discord_sinks
 except (ImportError, AttributeError):  # pragma: no cover - handled at runtime
@@ -22,6 +24,8 @@ else:
 from ..logging_utils import get_logger
 from .stt import SpeechToText
 from .tts import TextToSpeech
+
+ensure_voice_recording_support()
 
 _LOGGER = get_logger(__name__)
 
