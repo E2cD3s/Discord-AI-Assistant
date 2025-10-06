@@ -22,6 +22,7 @@ import asyncio
 import inspect
 import logging
 import select
+import socket
 import struct
 import threading
 import time
@@ -88,13 +89,36 @@ def ensure_voice_recording_support() -> None:
         if inner_sock is not None:
             sock = inner_sock
 
+        # Some discord.py releases wrap the transport even deeper.  We walk a
+        # small chain of common attribute names to find the actual UDP socket
+        # object.  This mirrors the structures used by both discord.py and
+        # py-cord while gracefully handling new variants that may appear.
+        seen: set[int] = set()
+        candidate = sock
+        while candidate is not None and id(candidate) not in seen:
+            seen.add(id(candidate))
+            if isinstance(candidate, socket.socket):
+                sock = candidate
+                break
+
+            for attr in ("socket", "_socket", "sock"):
+                next_candidate = getattr(candidate, attr, None)
+                if next_candidate is not None and id(next_candidate) not in seen:
+                    candidate = next_candidate
+                    break
+            else:
+                # No further candidates found; leave ``sock`` unchanged so the
+                # additional safety checks below can decide whether draining is
+                # possible.
+                break
+
         try:
             # ``discord.py`` stores the UDP transport on ``VoiceClient.socket`` in
             # newer releases, but older versions (which require this compat shim)
             # expose a lightweight wrapper without ``fileno``.  ``select``
             # requires a real socket object so we gracefully skip draining in
             # that scenario instead of raising ``TypeError``.
-            sock.fileno()
+            fileno = sock.fileno()
         except AttributeError:
             _LOGGER.debug(
                 "Voice socket %r does not expose fileno(); skipping drain.", sock
@@ -103,6 +127,14 @@ def ensure_voice_recording_support() -> None:
         except (OSError, ValueError, TypeError):
             _LOGGER.debug(
                 "Voice socket %r reports invalid fileno(); skipping drain.", sock
+            )
+            return
+
+        if not isinstance(fileno, int):
+            _LOGGER.debug(
+                "Voice socket %r returned non-integer fileno %r; skipping drain.",
+                sock,
+                fileno,
             )
             return
 
