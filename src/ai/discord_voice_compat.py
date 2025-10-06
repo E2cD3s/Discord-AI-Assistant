@@ -79,6 +79,15 @@ def ensure_voice_recording_support() -> None:
         if sock is None:
             return
 
+        # ``discord.py`` has historically stored either the raw UDP socket or a
+        # wrapper object (``DiscordVoiceSocket``/``VoiceUDPClient``) on
+        # ``VoiceClient.socket``.  Only the raw socket implements ``fileno``.
+        # When we encounter a wrapper we peel back the layer so ``select`` gets
+        # an object with the expected interface.
+        inner_sock = getattr(sock, "socket", None)
+        if inner_sock is not None:
+            sock = inner_sock
+
         try:
             # ``discord.py`` stores the UDP transport on ``VoiceClient.socket`` in
             # newer releases, but older versions (which require this compat shim)
@@ -87,10 +96,14 @@ def ensure_voice_recording_support() -> None:
             # that scenario instead of raising ``TypeError``.
             sock.fileno()
         except AttributeError:
-            _LOGGER.debug("Voice socket %r does not expose fileno(); skipping drain.", sock)
+            _LOGGER.debug(
+                "Voice socket %r does not expose fileno(); skipping drain.", sock
+            )
             return
-        except (OSError, ValueError):
-            _LOGGER.debug("Voice socket %r reports invalid fileno(); skipping drain.", sock)
+        except (OSError, ValueError, TypeError):
+            _LOGGER.debug(
+                "Voice socket %r reports invalid fileno(); skipping drain.", sock
+            )
             return
 
         while True:
