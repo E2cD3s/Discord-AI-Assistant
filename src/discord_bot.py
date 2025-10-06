@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from .ai.conversation_manager import ConversationManager
@@ -68,11 +69,12 @@ class DiscordAssistantBot(commands.Bot):
 
         try:
             if self.config_data.discord.guild_ids:
-                await self.sync_commands(guild_ids=self.config_data.discord.guild_ids)
+                for guild_id in self.config_data.discord.guild_ids:
+                    await self.tree.sync(guild=discord.Object(id=guild_id))
             else:
-                await self.sync_commands()
+                await self.tree.sync()
         except AttributeError:  # pragma: no cover - defensive guard for unsupported clients
-            _LOGGER.debug("sync_commands is unavailable on this Discord client")
+            _LOGGER.debug("Command tree synchronization is unavailable on this Discord client")
             return
 
         self._commands_synced = True
@@ -84,9 +86,15 @@ class DiscordAssistantBot(commands.Bot):
         prefix_registration()
 
     def _register_slash_commands(self) -> None:
-        slash_kwargs: Dict[str, Any] = {}
-        if self.config_data.discord.guild_ids:
-            slash_kwargs["guild_ids"] = self.config_data.discord.guild_ids
+        guild_ids = self.config_data.discord.guild_ids or []
+        guild_objects = [discord.Object(id=guild_id) for guild_id in guild_ids]
+
+        def _register_command(command: app_commands.Command) -> None:
+            if guild_objects:
+                for guild in guild_objects:
+                    self.tree.add_command(command.copy(), guild=guild)
+            else:
+                self.tree.add_command(command)
 
         async def reset_handler(interaction: discord.Interaction) -> None:
             try:
@@ -115,56 +123,51 @@ class DiscordAssistantBot(commands.Bot):
                 interaction, embed=self._build_status_embed()
             )
 
-        @self.slash_command(
+        reset_command = app_commands.Command(
             name="reset",
             description="Clear the assistant conversation history for this channel",
-            **slash_kwargs,
+            callback=reset_handler,
         )
-        async def reset_command(ctx: discord.ApplicationContext) -> None:
-            await reset_handler(ctx.interaction)
+        _register_command(reset_command)
 
-        ask_group = discord.SlashCommandGroup(
-            "ask",
-            "Ask the assistant a question",
-            **slash_kwargs,
+        ask_group = app_commands.Group(
+            name="ask",
+            description="Ask the assistant a question",
         )
 
         @ask_group.command(
             name="text",
             description="Ask the assistant a question and receive a text reply",
         )
-        @discord.option(
-            "question",
-            str,
-            description="The question you want to ask the assistant",
+        @app_commands.describe(
+            question="The question you want to ask the assistant",
         )
-        async def ask_text_command(ctx: discord.ApplicationContext, question: str) -> None:
-            reply = await ask_handler(ctx.interaction, question)
+        async def ask_text_command(
+            interaction: discord.Interaction, question: str
+        ) -> None:
+            reply = await ask_handler(interaction, question)
             if reply is None:
                 return
             await self._send_interaction_message(
-                ctx.interaction, reply, prefer_followup=True
+                interaction, reply, prefer_followup=True
             )
 
         @ask_group.command(
             name="voice",
             description="Ask the assistant a question and hear the reply in voice",
         )
-        @discord.option(
-            "question",
-            str,
-            description="The question you want to ask the assistant",
+        @app_commands.describe(
+            question="The question you want to ask the assistant",
         )
         async def ask_voice_command(
-            ctx: discord.ApplicationContext, question: str
+            interaction: discord.Interaction, question: str
         ) -> None:
-            interaction = ctx.interaction
             reply = await ask_handler(interaction, question)
             if reply is None:
                 return
             try:
                 voice_client, _ = await self._ensure_voice_connection(
-                    ctx,
+                    interaction,
                     text_channel_id=interaction.channel_id,
                     start_listening=True,
                 )
@@ -192,19 +195,17 @@ class DiscordAssistantBot(commands.Bot):
                 prefer_followup=True,
             )
 
-        self.add_application_command(ask_group)
+        _register_command(ask_group)
 
-        @self.slash_command(
+        @app_commands.command(
             name="join",
             description="Summon the assistant to your current voice channel",
-            **slash_kwargs,
         )
-        async def join_command(ctx: discord.ApplicationContext) -> None:
-            interaction = ctx.interaction
+        async def join_command(interaction: discord.Interaction) -> None:
             await self._defer_interaction(interaction)
             try:
                 voice_client, _ = await self._ensure_voice_connection(
-                    ctx,
+                    interaction,
                     text_channel_id=interaction.channel_id,
                     start_listening=True,
                 )
@@ -217,38 +218,40 @@ class DiscordAssistantBot(commands.Bot):
                 interaction, f"Joined voice channel {voice_client.channel.name}."
             )
 
-        @self.slash_command(
+        _register_command(join_command)
+
+        @app_commands.command(
             name="leave",
             description="Disconnect the assistant from the voice channel",
-            **slash_kwargs,
         )
-        async def leave_command(ctx: discord.ApplicationContext) -> None:
-            interaction = ctx.interaction
+        async def leave_command(interaction: discord.Interaction) -> None:
             voice_client = getattr(interaction.guild, "voice_client", None)
             if voice_client and voice_client.channel:
                 await self._cleanup_voice_state(voice_client.channel.id)
-            await self.voice_session.leave(ctx)
+            await self.voice_session.leave(interaction)
             await self._send_interaction_message(
                 interaction, "Disconnected from voice channel."
             )
 
-        @self.slash_command(
+        _register_command(leave_command)
+
+        @app_commands.command(
             name="say",
             description="Have the assistant speak in the connected voice channel",
-            **slash_kwargs,
         )
-        @discord.option(
-            "text",
-            str,
-            description="What you want the assistant to say",
+        @app_commands.describe(
+            text="What you want the assistant to say",
         )
-        async def say_command(ctx: discord.ApplicationContext, text: str) -> None:
-            interaction = ctx.interaction
-            voice_client = getattr(interaction.guild, "voice_client", None)
+        async def say_command(interaction: discord.Interaction, text: str) -> None:
+            voice_client = (
+                getattr(interaction.guild, "voice_client", None)
+                if interaction.guild
+                else None
+            )
             if not voice_client or not getattr(voice_client, "channel", None):
                 try:
                     voice_client, _ = await self._ensure_voice_connection(
-                        ctx,
+                        interaction,
                         text_channel_id=interaction.channel_id,
                         start_listening=True,
                     )
@@ -264,13 +267,16 @@ class DiscordAssistantBot(commands.Bot):
                 interaction, "Playing synthesized speech."
             )
 
-        @self.slash_command(
+        _register_command(say_command)
+
+        @app_commands.command(
             name="status",
             description="Show configuration details for the assistant",
-            **slash_kwargs,
         )
-        async def status_command(ctx: discord.ApplicationContext) -> None:
-            await status_handler(ctx.interaction)
+        async def status_command(interaction: discord.Interaction) -> None:
+            await status_handler(interaction)
+
+        _register_command(status_command)
 
     def _register_prefix_commands(self) -> None:
 
@@ -338,7 +344,7 @@ class DiscordAssistantBot(commands.Bot):
 
     async def _ensure_voice_connection(
         self,
-        ctx: discord.ApplicationContext | commands.Context,
+        ctx: commands.Context | discord.Interaction,
         *,
         text_channel_id: Optional[int],
         start_listening: bool = False,

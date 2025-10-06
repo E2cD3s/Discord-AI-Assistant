@@ -56,7 +56,7 @@ def test_missing_app_command_support_surfaces_runtime_error(monkeypatch: pytest.
     finally:
         sys.modules.pop("src.preflight", None)
 
-    assert "py-cord[voice]" in str(excinfo.value)
+    assert "discord.py[voice]" in str(excinfo.value)
 
 
 def test_app_command_support_with_required_attributes_passes(monkeypatch: pytest.MonkeyPatch) -> None:

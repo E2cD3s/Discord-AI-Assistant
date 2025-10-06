@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
 import discord
+from discord.ext import commands
 
 try:  # pragma: no cover - optional dependency resolution
     from discord import sinks as discord_sinks
@@ -46,7 +47,7 @@ class VoiceSession:
 
     async def join(
         self,
-        ctx: discord.ApplicationContext | discord.ext.commands.Context | discord.Interaction,
+        ctx: commands.Context | discord.Interaction,
     ) -> discord.VoiceClient:
         author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
         voice_state = getattr(author, "voice", None) if author else None
@@ -74,7 +75,7 @@ class VoiceSession:
             if not bool(getattr(discord.voice_client, "has_nacl", False)):
                 raise RuntimeError(
                     "Voice connections require the PyNaCl dependency. "
-                    "Install 'pynacl' and ensure the voice extra is enabled for py-cord."
+                    "Install 'pynacl' and ensure the voice extra is enabled for discord.py."
                 )
 
             async def _cleanup_failed_connection() -> None:
@@ -176,7 +177,7 @@ class VoiceSession:
 
     async def leave(
         self,
-        ctx: discord.ApplicationContext | discord.ext.commands.Context | discord.Interaction,
+        ctx: commands.Context | discord.Interaction,
     ) -> None:
         voice_client = getattr(ctx, "voice_client", None)
         if voice_client is None:
@@ -266,12 +267,12 @@ class VoiceSession:
         if discord_sinks is None:
             raise RuntimeError(
                 "The installed Discord library does not expose voice sinks. "
-                "Install 'py-cord[voice]>=2.5.0' to enable voice recording support."
+                "Install 'discord.py[voice]>=2.3.2' to enable voice recording support."
             )
         wave_sink = getattr(discord_sinks, "WaveSink", None)
         if wave_sink is None:
             raise RuntimeError(
-                "discord.sinks.WaveSink is unavailable. Update to a newer version of py-cord to continue."
+                "discord.sinks.WaveSink is unavailable. Update to a newer version of discord.py to continue."
             )
         return wave_sink()
 

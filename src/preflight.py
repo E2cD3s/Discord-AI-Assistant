@@ -49,19 +49,19 @@ def _ensure_discord_sinks_available() -> None:
         from discord import sinks as _sinks  # type: ignore
     except (ImportError, AttributeError) as exc:
         raise RuntimeError(
-            "Required discord voice modules are unavailable. Install 'py-cord[voice]==2.6.1' to enable voice capture."
+            "Required discord voice modules are unavailable. Install 'discord.py[voice]>=2.3.2' to enable voice capture."
         ) from exc
 
     if not hasattr(_sinks, "WaveSink"):
         raise RuntimeError(
-            "discord.sinks.WaveSink is unavailable. Install or update 'py-cord[voice]==2.6.1' "
+            "discord.sinks.WaveSink is unavailable. Install or update 'discord.py[voice]>=2.3.2' "
             "to enable voice capture."
         )
 
     if not ensure_app_commands_ready():
         raise RuntimeError(
             "discord.app_commands is missing required features (Command, describe, or guild_only)."
-            " Install or update 'py-cord[voice]==2.6.1' to enable slash command support."
+            " Install or update 'discord.py[voice]>=2.3.2' to enable slash command support."
         )
 
     _LOGGER.debug("discord voice sinks and enums are available")
