@@ -79,11 +79,25 @@ def ensure_voice_recording_support() -> None:
         if sock is None:
             return
 
+        try:
+            # ``discord.py`` stores the UDP transport on ``VoiceClient.socket`` in
+            # newer releases, but older versions (which require this compat shim)
+            # expose a lightweight wrapper without ``fileno``.  ``select``
+            # requires a real socket object so we gracefully skip draining in
+            # that scenario instead of raising ``TypeError``.
+            sock.fileno()
+        except AttributeError:
+            _LOGGER.debug("Voice socket %r does not expose fileno(); skipping drain.", sock)
+            return
+        except (OSError, ValueError):
+            _LOGGER.debug("Voice socket %r reports invalid fileno(); skipping drain.", sock)
+            return
+
         while True:
             try:
                 ready, _, _ = select.select([sock], [], [], 0.0)
             except (OSError, ValueError, TypeError):
-                _LOGGER.debug("Voice socket unavailable while draining pending data.")
+                _LOGGER.debug("Voice socket unavailable while draining pending data.", exc_info=True)
                 break
 
             if not ready:
