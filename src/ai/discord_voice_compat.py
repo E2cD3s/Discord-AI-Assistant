@@ -75,13 +75,22 @@ def ensure_voice_recording_support() -> None:
             self.sync_start = False  # type: ignore[attribute-defined-outside-init]
 
     def _empty_socket(self: discord.VoiceClient) -> None:
+        sock = getattr(self, "socket", None)
+        if sock is None:
+            return
+
         while True:
-            ready, _, _ = select.select([self.socket], [], [], 0.0)
+            try:
+                ready, _, _ = select.select([sock], [], [], 0.0)
+            except (OSError, ValueError, TypeError):
+                _LOGGER.debug("Voice socket unavailable while draining pending data.")
+                break
+
             if not ready:
                 break
-            for sock in ready:
+            for ready_sock in ready:
                 with suppress(Exception):  # pragma: no branch - defensive guard
-                    sock.recv(4096)
+                    ready_sock.recv(4096)
 
     def _start_recording(
         self: discord.VoiceClient,
@@ -100,6 +109,9 @@ def ensure_voice_recording_support() -> None:
             raise RecordingException("Must provide a Sink object.")
 
         _empty_socket(self)
+
+        if getattr(self, "socket", None) is None:
+            raise RecordingException("Voice UDP socket is not initialised.")
 
         decoder = opus.DecodeManager(self)
         decoder.start()
@@ -142,8 +154,13 @@ def ensure_voice_recording_support() -> None:
 
         try:
             while self.recording:
+                udp_socket = getattr(self, "socket", None)
+                if udp_socket is None:
+                    time.sleep(0.01)
+                    continue
+
                 try:
-                    ready, _, err = select.select([self.socket], [], [self.socket], 0.01)
+                    ready, _, err = select.select([udp_socket], [], [udp_socket], 0.01)
                 except Exception:  # pragma: no cover - defensive guard
                     _LOGGER.exception("Voice receive select() failed in %s", log_context)
                     break
@@ -154,7 +171,7 @@ def ensure_voice_recording_support() -> None:
                     continue
 
                 try:
-                    data = self.socket.recv(4096)
+                    data = udp_socket.recv(4096)
                 except OSError:
                     _LOGGER.exception("Voice socket closed unexpectedly in %s", log_context)
                     _stop_recording(self)
