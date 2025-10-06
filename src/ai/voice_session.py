@@ -202,13 +202,30 @@ class VoiceSession:
             timeout,
         )
 
+        if not getattr(voice_client, "is_connected", lambda: False)():
+            raise RuntimeError(
+                "Cannot start listening because the voice client is not connected to a channel. "
+                "Ensure the bot has successfully joined a voice channel before issuing listen commands."
+            )
+
         wave_sink = self._create_wave_sink()
 
         def after_recording(completed_sink: DiscordSink, *_) -> None:
             task = asyncio.create_task(self._handle_sink(completed_sink, on_transcription))
             self._active_recordings[self._voice_key(voice_client)] = task
 
-        voice_client.start_recording(wave_sink, after_recording)
+        start_recording = getattr(voice_client, "start_recording", None)
+        if not callable(start_recording):
+            raise RuntimeError(
+                "The active voice client does not expose recording support. "
+                "Install or upgrade to 'discord.py[voice]>=2.3.2' (or an equivalent fork with sinks support)."
+            )
+
+        try:
+            start_recording(wave_sink, after_recording)
+        except Exception:
+            _LOGGER.exception("Failed to start voice recording in channel %s", voice_client.channel)
+            raise
 
         try:
             await asyncio.sleep(timeout)
@@ -216,7 +233,15 @@ class VoiceSession:
             _LOGGER.info("Voice capture in %s cancelled", voice_client.channel)
             raise
         finally:
-            voice_client.stop_recording()
+            stop_recording = getattr(voice_client, "stop_recording", None)
+            if callable(stop_recording):
+                stop_recording()
+            else:
+                _LOGGER.warning(
+                    "Voice client for channel %s does not implement stop_recording(); "
+                    "audio capture may continue until the client disconnects.",
+                    voice_client.channel,
+                )
             task = self._active_recordings.pop(self._voice_key(voice_client), None)
             if task:
                 await task
