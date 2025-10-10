@@ -376,7 +376,33 @@ class VoiceSession:
                 continue
 
             start_time = getattr(audio, "start_time", 0.0)
-            audio_bytes = audio.file.getvalue()
+            audio_file = audio.file
+            audio_bytes: bytes | None = None
+
+            if hasattr(audio_file, "getvalue"):
+                try:
+                    audio_bytes = audio_file.getvalue()
+                except Exception:  # pragma: no cover - defensive guard
+                    _LOGGER.exception(
+                        "Failed to read buffered audio via getvalue() for user %s", user
+                    )
+                    audio_bytes = None
+
+            if audio_bytes is None:
+                try:
+                    if hasattr(audio_file, "seek"):
+                        audio_file.seek(0)
+                    audio_bytes = audio_file.read()
+                except Exception:  # pragma: no cover - defensive guard
+                    _LOGGER.exception(
+                        "Failed to read buffered audio via read() for user %s", user
+                    )
+                    audio_bytes = None
+
+            if not audio_bytes:
+                _LOGGER.debug("Ignoring empty audio buffer for user %s", user)
+                continue
+
             buffered_audio.append((start_time, user, audio_bytes))
 
         buffered_audio.sort(key=lambda item: item[0])

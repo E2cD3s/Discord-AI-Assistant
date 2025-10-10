@@ -306,10 +306,6 @@ def ensure_voice_recording_support() -> None:
 
         finally:
             self.stopping_time = time.perf_counter()
-            try:
-                sink.cleanup()
-            except Exception:  # pragma: no cover - defensive guard
-                _LOGGER.exception("Voice sink cleanup failed in %s", log_context)
 
             loop = getattr(self, "loop", None)
 
