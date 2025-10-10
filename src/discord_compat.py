@@ -101,11 +101,41 @@ def _install_pycord_shims(discord_module: object) -> None:
 
     if not hasattr(module, "Command"):
         class _PycordCommand:
-            def __init__(self, callback):
+            """Minimal stand-in for :class:`discord.app_commands.Command` used by Pycord.
+
+            The shim only needs to support the bits of the command API that the
+            assistant relies on (``name``, ``description``, ``callback`` and the
+            ability to ``copy`` the command for guild specific registration).
+            """
+
+            def __init__(self, *args, **kwargs):
+                callback = kwargs.pop("callback", None)
+                if args:
+                    callback = args[0]
+
+                if callback is None:
+                    raise TypeError("callback is required for Pycord command shim")
+
                 self.callback = callback
+                self.name = kwargs.pop("name", getattr(callback, "__name__", "command"))
+                self.description = kwargs.pop("description", "")
+                # Preserve any extra keyword arguments so ``copy`` can forward
+                # them. This mirrors the behaviour of discord.py's ``Command``
+                # where these attributes are stored for later use.
+                self._extras = dict(kwargs)
 
             def __call__(self, *args, **kwargs):  # pragma: no cover - passthrough helper
                 return self.callback(*args, **kwargs)
+
+            def copy(self):
+                """Return a new shim instance with the same configuration."""
+
+                return _PycordCommand(
+                    callback=self.callback,
+                    name=self.name,
+                    description=self.description,
+                    **self._extras,
+                )
 
         module.Command = _PycordCommand
         stubbed_attributes.add("Command")
