@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import time
 from contextlib import suppress
@@ -57,6 +58,10 @@ class DiscordAssistantBot(commands.Bot):
         wake_tokens = [token for token in re.split(r"\s+", config.discord.wake_word.strip()) if token]
         pattern = r"\W+".join(re.escape(token) for token in wake_tokens) if wake_tokens else re.escape(config.discord.wake_word)
         self._wake_word_regex = re.compile(rf"(?<!\w){pattern}(?:\W+|$)", re.IGNORECASE)
+        self._stop_voice_regex = re.compile(
+            r"\b(?:stop(?:\s+(?:talking|speaking|playing|playback|audio))?|shut\s+up|be\s+quiet|quiet|silence)\b",
+            re.IGNORECASE,
+        )
         self.status_rotator = tasks.loop(seconds=config.discord.status_rotation_seconds)(self.rotate_status)
         self._register_commands()
 
@@ -270,6 +275,38 @@ class DiscordAssistantBot(commands.Bot):
         _register_command(say_command)
 
         @app_commands.command(
+            name="stop",
+            description="Stop the assistant's current voice playback",
+        )
+        async def stop_command(interaction: discord.Interaction) -> None:
+            voice_client = (
+                getattr(interaction.guild, "voice_client", None)
+                if interaction.guild
+                else None
+            )
+            if not voice_client or not getattr(voice_client, "channel", None):
+                await self._send_interaction_message(
+                    interaction,
+                    "I'm not connected to a voice channel.",
+                    ephemeral=True,
+                )
+                return
+
+            if self.voice_session.stop_speaking(voice_client):
+                await self._send_interaction_message(
+                    interaction, "Stopped the current voice playback."
+                )
+                return
+
+            await self._send_interaction_message(
+                interaction,
+                "There is no active voice playback to stop.",
+                ephemeral=True,
+            )
+
+        _register_command(stop_command)
+
+        @app_commands.command(
             name="status",
             description="Show configuration details for the assistant",
         )
@@ -337,6 +374,18 @@ class DiscordAssistantBot(commands.Bot):
                 return
             await self.voice_session.speak(voice_client, text)
             await ctx.send("Playing synthesized speech.")
+
+        @self.command(name="stop", help="Stop the assistant's current voice playback")
+        async def stop_command(ctx: commands.Context) -> None:
+            voice_client = getattr(ctx.guild, "voice_client", None) if ctx.guild else None
+            if not voice_client:
+                await ctx.send("I'm not connected to a voice channel.")
+                return
+
+            if self.voice_session.stop_speaking(voice_client):
+                await ctx.send("Stopped the current voice playback.")
+            else:
+                await ctx.send("There is no active voice playback to stop.")
 
         @self.command(name="status", help="Show configuration details for the assistant")
         async def status_prefix(ctx: commands.Context) -> None:
@@ -547,6 +596,26 @@ class DiscordAssistantBot(commands.Bot):
         if channel is None:
             return
         state = self._voice_states.get(channel.id)
+
+        if voice_client.is_playing() and self._is_voice_stop_request(transcript):
+            if state:
+                state.voice_client = voice_client
+            stopped = False
+            try:
+                stopped = self.voice_session.stop_speaking(voice_client)
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to stop voice playback in channel %s via voice command",
+                    getattr(channel, "id", "unknown"),
+                )
+            message = (
+                "Stopped the current voice playback."
+                if stopped
+                else "There is no active voice playback to stop."
+            )
+            await self._send_voice_feedback(state, message)
+            return
+
         if state is None:
             return
 
@@ -582,6 +651,37 @@ class DiscordAssistantBot(commands.Bot):
 
         if now - state.start_time >= 30.0:
             await self._finalize_conversation(channel.id, "maximum duration")
+
+    def _is_voice_stop_request(self, transcript: str) -> bool:
+        if not transcript:
+            return False
+        return bool(self._stop_voice_regex.search(transcript))
+
+    async def _send_voice_feedback(
+        self, state: WakeConversationState | None, message: str
+    ) -> None:
+        if not message:
+            return
+        if not state or not state.text_channel_id:
+            return
+
+        channel_id = state.text_channel_id
+        channel = self.get_channel(channel_id)
+        if channel is None:
+            return
+
+        send = getattr(channel, "send", None)
+        if not callable(send):
+            return
+
+        try:
+            result = send(message)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # pragma: no cover - defensive logging
+            _LOGGER.exception(
+                "Failed to send voice control feedback to channel %s", channel_id
+            )
 
     async def _finalize_conversation(self, channel_id: int, reason: str) -> None:
         state = self._voice_states.get(channel_id)
