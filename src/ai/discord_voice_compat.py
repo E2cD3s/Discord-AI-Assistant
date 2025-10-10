@@ -163,67 +163,42 @@ def ensure_voice_recording_support() -> None:
         if not hasattr(self, "sync_start"):
             self.sync_start = False  # type: ignore[attribute-defined-outside-init]
 
-    def _empty_socket(self: discord.VoiceClient) -> None:
-        sock = getattr(self, "socket", None)
-        if sock is None:
-            return
+    def _locate_voice_socket(self: discord.VoiceClient) -> Any:
+        """Return a socket-like object suitable for ``select`` operations."""
 
-        # ``discord.py`` has historically stored either the raw UDP socket or a
-        # wrapper object (``DiscordVoiceSocket``/``VoiceUDPClient``) on
-        # ``VoiceClient.socket``.  Only the raw socket implements ``fileno``.
-        # When we encounter a wrapper we peel back the layer so ``select`` gets
-        # an object with the expected interface.
-        inner_sock = getattr(sock, "socket", None)
-        if inner_sock is not None:
-            sock = inner_sock
+        primary = getattr(self, "socket", None) or getattr(self, "udp", None)
+        if primary is None:
+            return None
 
-        # Some discord.py releases wrap the transport even deeper.  We walk a
-        # small chain of common attribute names to find the actual UDP socket
-        # object.  This mirrors the structures used by both discord.py and
-        # py-cord while gracefully handling new variants that may appear.
         seen: set[int] = set()
-        candidate = sock
+        candidate: Any | None = primary
         while candidate is not None and id(candidate) not in seen:
             seen.add(id(candidate))
-            if isinstance(candidate, socket.socket):
-                sock = candidate
-                break
 
-            for attr in ("socket", "_socket", "sock"):
+            fileno = getattr(candidate, "fileno", None)
+            if callable(fileno):
+                try:
+                    fd = fileno()
+                except (AttributeError, OSError, ValueError, TypeError):
+                    fd = None
+                else:
+                    if isinstance(fd, int):
+                        return candidate
+
+            for attr in ("socket", "_socket", "sock", "transport", "udp"):
                 next_candidate = getattr(candidate, attr, None)
                 if next_candidate is not None and id(next_candidate) not in seen:
                     candidate = next_candidate
                     break
             else:
-                # No further candidates found; leave ``sock`` unchanged so the
-                # additional safety checks below can decide whether draining is
-                # possible.
                 break
 
-        try:
-            # ``discord.py`` stores the UDP transport on ``VoiceClient.socket`` in
-            # newer releases, but older versions (which require this compat shim)
-            # expose a lightweight wrapper without ``fileno``.  ``select``
-            # requires a real socket object so we gracefully skip draining in
-            # that scenario instead of raising ``TypeError``.
-            fileno = sock.fileno()
-        except AttributeError:
-            _LOGGER.debug(
-                "Voice socket %r does not expose fileno(); skipping drain.", sock
-            )
-            return
-        except (OSError, ValueError, TypeError):
-            _LOGGER.debug(
-                "Voice socket %r reports invalid fileno(); skipping drain.", sock
-            )
-            return
+        return None
 
-        if not isinstance(fileno, int):
-            _LOGGER.debug(
-                "Voice socket %r returned non-integer fileno %r; skipping drain.",
-                sock,
-                fileno,
-            )
+    def _empty_socket(self: discord.VoiceClient) -> None:
+        sock = _locate_voice_socket(self)
+        if sock is None:
+            _LOGGER.debug("No selectable voice socket found while draining pending data.")
             return
 
         while True:
@@ -301,7 +276,7 @@ def ensure_voice_recording_support() -> None:
 
         try:
             while self.recording:
-                udp_socket = getattr(self, "socket", None)
+                udp_socket = _locate_voice_socket(self)
                 if udp_socket is None:
                     time.sleep(0.01)
                     continue
@@ -336,13 +311,25 @@ def ensure_voice_recording_support() -> None:
             except Exception:  # pragma: no cover - defensive guard
                 _LOGGER.exception("Voice sink cleanup failed in %s", log_context)
 
-            try:
-                result = callback(sink, *args)
-                if inspect.iscoroutine(result):
-                    future = asyncio.run_coroutine_threadsafe(result, self.loop)
-                    future.result()
-            except Exception:
-                _LOGGER.exception("Recording completion callback raised in %s", log_context)
+            loop = getattr(self, "loop", None)
+
+            def _invoke_callback() -> None:
+                try:
+                    result = callback(sink, *args)
+                    if inspect.iscoroutine(result):
+                        asyncio.create_task(result)
+                except Exception:
+                    _LOGGER.exception("Recording completion callback raised in %s", log_context)
+
+            if isinstance(loop, asyncio.AbstractEventLoop) and not loop.is_closed():
+                loop.call_soon_threadsafe(_invoke_callback)
+            else:
+                try:
+                    result = callback(sink, *args)
+                    if inspect.iscoroutine(result):
+                        asyncio.run(result)
+                except Exception:
+                    _LOGGER.exception("Recording completion callback raised in %s", log_context)
 
     def _unpack_audio(self: discord.VoiceClient, data: bytes) -> None:
         if len(data) < 2:
