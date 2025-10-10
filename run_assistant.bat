@@ -1,6 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
 
+title Discord AI Assistant
+color 0A
+cls
+echo ==================================================
+echo   Discord AI Assistant Launcher
+echo ==================================================
+echo.
+
 REM Determine project root based on script location
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR%"=="" set "SCRIPT_DIR=.\"
