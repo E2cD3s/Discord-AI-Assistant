@@ -55,8 +55,12 @@ class DiscordAssistantBot(commands.Bot):
         self._commands_synced = False
         self._voice_states: Dict[int, WakeConversationState] = {}
         self._wake_cooldowns: Dict[int, float] = {}
-        wake_tokens = [token for token in re.split(r"\s+", config.discord.wake_word.strip()) if token]
-        pattern = r"\W+".join(re.escape(token) for token in wake_tokens) if wake_tokens else re.escape(config.discord.wake_word)
+        wake_phrase = config.discord.wake_word.strip()
+        wake_tokens = [token for token in re.findall(r"\w+", wake_phrase)]
+        if wake_tokens:
+            pattern = r"\W+".join(re.escape(token) for token in wake_tokens)
+        else:
+            pattern = re.escape(wake_phrase or config.discord.wake_word)
         self._wake_word_regex = re.compile(rf"(?<!\w){pattern}(?:\W+|$)", re.IGNORECASE)
         self._stop_voice_regex = re.compile(
             r"\b(?:stop(?:\s+(?:talking|speaking|playing|playback|audio))?|shut\s+up|be\s+quiet|quiet|silence)\b",

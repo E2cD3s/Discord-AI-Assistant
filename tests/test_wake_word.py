@@ -22,8 +22,7 @@ from src.config import (
 from src.discord_bot import DiscordAssistantBot
 
 
-@pytest.fixture()
-def bot() -> DiscordAssistantBot:
+def create_bot_with_wake_word(wake_word: str) -> DiscordAssistantBot:
     config = AppConfig(
         discord=DiscordConfig(
             token="dummy-token",
@@ -32,7 +31,7 @@ def bot() -> DiscordAssistantBot:
             guild_ids=[],
             status_rotation_seconds=60,
             statuses=["Ready"],
-            wake_word="hey assistant",
+            wake_word=wake_word,
             wake_word_cooldown_seconds=0,
             reply_in_thread=False,
         ),
@@ -75,6 +74,11 @@ def bot() -> DiscordAssistantBot:
     return DiscordAssistantBot(config, conversation_manager, voice_session)
 
 
+@pytest.fixture()
+def bot() -> DiscordAssistantBot:
+    return create_bot_with_wake_word("hey assistant")
+
+
 def test_wake_word_matches_with_punctuation(bot: DiscordAssistantBot) -> None:
     assert bot._wake_word_regex.search("hey, assistant tell me a joke")
 
@@ -87,3 +91,8 @@ def test_wake_word_removal_preserves_remaining_text(bot: DiscordAssistantBot) ->
     message = "hey assistant? can you remind hey assistant later"
     cleaned = bot._wake_word_regex.sub("", message, count=1).strip()
     assert cleaned == "can you remind hey assistant later"
+
+
+def test_wake_word_allows_punctuation_in_configuration() -> None:
+    bot_with_commas = create_bot_with_wake_word("hey, assistant")
+    assert bot_with_commas._wake_word_regex.search("hey assistant can you hear me")
