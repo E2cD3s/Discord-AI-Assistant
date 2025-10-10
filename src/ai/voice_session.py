@@ -350,5 +350,18 @@ class VoiceSession:
         voice_client.play(audio_source, after=after_playback)
         return audio_path
 
+    def stop_speaking(self, voice_client: discord.VoiceClient) -> bool:
+        """Stop any active voice playback.
+
+        Returns ``True`` if playback was stopped, or ``False`` if the bot was
+        not currently speaking.
+        """
+
+        if voice_client.is_playing():
+            voice_client.stop()
+            return True
+
+        return False
+
 
 __all__ = ["VoiceSession", "TranscriptionCallback"]
