@@ -390,6 +390,7 @@ class VoiceSession:
             _LOGGER.debug("Transcribing audio captured from user %s", user)
             transcript = await self._stt.transcribe(stream)
             if transcript:
+                _LOGGER.info("Live transcription from %s: %s", user, transcript)
                 await on_transcription(user, transcript)
             else:
                 _LOGGER.debug("No transcript produced for user %s", user)
