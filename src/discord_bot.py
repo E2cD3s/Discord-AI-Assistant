@@ -48,6 +48,17 @@ class DiscordAssistantBot(commands.Bot):
         intents.members = True
         intents.voice_states = True
         super().__init__(command_prefix=config.discord.command_prefix, intents=intents)
+
+        # ``commands.Bot`` gained a ``tree`` attribute in discord.py v2.0. Older
+        # installations (or compatible forks) may not provide it, which would
+        # cause attribute errors when registering slash commands. Lazily create
+        # the command tree when it's missing so the bot can still operate.
+        try:  # pragma: no cover - exercised on older discord.py versions
+            self._command_tree = self.tree  # type: ignore[attr-defined]
+        except AttributeError:  # pragma: no cover - depends on library version
+            self._command_tree = app_commands.CommandTree(self)
+            setattr(self, "tree", self._command_tree)
+
         self.config_data = config
         self.conversation_manager = conversation_manager
         self.voice_session = voice_session
@@ -79,9 +90,9 @@ class DiscordAssistantBot(commands.Bot):
         try:
             if self.config_data.discord.guild_ids:
                 for guild_id in self.config_data.discord.guild_ids:
-                    await self.tree.sync(guild=discord.Object(id=guild_id))
+                    await self._command_tree.sync(guild=discord.Object(id=guild_id))
             else:
-                await self.tree.sync()
+                await self._command_tree.sync()
         except AttributeError:  # pragma: no cover - defensive guard for unsupported clients
             _LOGGER.debug("Command tree synchronization is unavailable on this Discord client")
             return
@@ -101,9 +112,9 @@ class DiscordAssistantBot(commands.Bot):
         def _register_command(command: app_commands.Command) -> None:
             if guild_objects:
                 for guild in guild_objects:
-                    self.tree.add_command(command.copy(), guild=guild)
+                    self._command_tree.add_command(command.copy(), guild=guild)
             else:
-                self.tree.add_command(command)
+                self._command_tree.add_command(command)
 
         async def reset_handler(interaction: discord.Interaction) -> None:
             try:
