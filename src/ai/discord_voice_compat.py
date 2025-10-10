@@ -26,6 +26,7 @@ import socket
 import struct
 import threading
 import time
+from collections import deque
 from contextlib import suppress
 from typing import Any, Callable
 
@@ -44,6 +45,93 @@ except (ImportError, AttributeError):  # pragma: no cover - handled at runtime
 _LOGGER = logging.getLogger(__name__)
 
 _RecordingCallback = Callable[[Sink, Any], Any]
+
+
+if opus is not None and not hasattr(opus, "DecodeManager"):
+    class _CompatDecodeManager(threading.Thread):
+        """Lightweight stand-in for :class:`py-cord`'s ``DecodeManager``.
+
+        The upstream ``discord.py`` library does not bundle the voice receive
+        helpers that py-cord exposes.  Some optional packages provide
+        ``discord.sinks`` but omit the decode manager class, leading to an
+        ``AttributeError`` when our compatibility layer attempts to start
+        recording.  This implementation mirrors the behaviour of py-cord's
+        version closely enough for our needs while avoiding the dependency on
+        py-cord itself.
+        """
+
+        def __init__(self, client: discord.VoiceClient) -> None:
+            super().__init__(daemon=True, name="DecodeManager")
+            self.client = client
+            self._decoder_cache: dict[int, opus.Decoder] = {}
+            self._queue: deque[RawData] = deque()
+            self._queue_lock = threading.Lock()
+            self._queue_event = threading.Event()
+            self._stop_event = threading.Event()
+
+        def decode(self, opus_frame: RawData) -> None:
+            if RawData is not None and not isinstance(opus_frame, RawData):
+                raise TypeError("opus_frame should be a RawData object.")
+
+            with self._queue_lock:
+                self._queue.append(opus_frame)
+            self._queue_event.set()
+
+        def run(self) -> None:  # pragma: no cover - requires voice hardware
+            while True:
+                self._queue_event.wait(0.05)
+
+                while True:
+                    with self._queue_lock:
+                        if self._queue:
+                            packet = self._queue.popleft()
+                        else:
+                            packet = None
+
+                    if packet is None:
+                        break
+
+                    decrypted = getattr(packet, "decrypted_data", None)
+                    if decrypted is None:
+                        continue
+
+                    try:
+                        decoder = self._get_decoder(packet.ssrc)
+                        packet.decoded_data = decoder.decode(decrypted)
+                    except opus.OpusError:
+                        _LOGGER.exception("Failed to decode Opus frame in voice receive thread.")
+                        continue
+
+                    try:
+                        self.client.recv_decoded_audio(packet)
+                    except Exception:  # pragma: no cover - defensive guard
+                        _LOGGER.exception("Voice client failed to handle decoded audio packet.")
+
+                if self._stop_event.is_set() and not self._has_pending_packets():
+                    break
+
+                self._queue_event.clear()
+
+        def stop(self) -> None:
+            self._stop_event.set()
+            self._queue_event.set()
+            if self.is_alive():
+                self.join(timeout=1.0)
+            self._decoder_cache.clear()
+
+        def _get_decoder(self, ssrc: int) -> opus.Decoder:
+            try:
+                return self._decoder_cache[ssrc]
+            except KeyError:
+                decoder = opus.Decoder()
+                self._decoder_cache[ssrc] = decoder
+                return decoder
+
+        def _has_pending_packets(self) -> bool:
+            with self._queue_lock:
+                return bool(self._queue)
+
+    opus.DecodeManager = _CompatDecodeManager  # type: ignore[attr-defined]
 
 
 def ensure_voice_recording_support() -> None:
