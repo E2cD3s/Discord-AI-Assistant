@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
@@ -49,6 +50,51 @@ class VoiceSession:
             raise RuntimeError("Voice client is not connected to any channel")
         return channel.id
 
+    async def _ensure_voice_reception(self, voice_client: discord.VoiceClient) -> None:
+        """Make sure the bot is not self-deafened or muted in the channel."""
+
+        guild = getattr(voice_client, "guild", None)
+        channel = getattr(voice_client, "channel", None)
+        if guild is None or channel is None:
+            return
+
+        change_state = getattr(guild, "change_voice_state", None)
+        if callable(change_state):
+            result: Any | None = None
+            try:
+                result = change_state(channel=channel, self_mute=False, self_deaf=False)
+            except TypeError:
+                try:
+                    result = change_state(channel=channel)
+                except Exception:  # pragma: no cover - network side effects
+                    _LOGGER.exception(
+                        "Failed to update voice state for channel %s", getattr(channel, "id", "unknown")
+                    )
+            except Exception:  # pragma: no cover - network side effects
+                _LOGGER.exception(
+                    "Failed to update voice state for channel %s", getattr(channel, "id", "unknown")
+                )
+
+            if inspect.isawaitable(result):
+                try:
+                    await result
+                except Exception:  # pragma: no cover - network side effects
+                    _LOGGER.exception(
+                        "Voice state update coroutine failed for channel %s", getattr(channel, "id", "unknown")
+                    )
+
+        if getattr(voice_client, "self_deaf", False):
+            try:
+                voice_client.self_deaf = False  # type: ignore[attr-defined-outside-init]
+            except Exception:
+                pass
+
+        if getattr(voice_client, "self_mute", False):
+            try:
+                voice_client.self_mute = False  # type: ignore[attr-defined-outside-init]
+            except Exception:
+                pass
+
     async def join(
         self,
         ctx: commands.Context | discord.Interaction,
@@ -73,9 +119,12 @@ class VoiceSession:
                 voice_client = getattr(guild, "voice_client", None)
             if voice_client:
                 if voice_client.channel.id == channel.id:
+                    await self._ensure_voice_reception(voice_client)
                     return voice_client
                 await voice_client.move_to(channel)
+                await self._ensure_voice_reception(voice_client)
                 return voice_client
+
             if not bool(getattr(discord.voice_client, "has_nacl", False)):
                 raise RuntimeError(
                     "Voice connections require the PyNaCl dependency. "
@@ -128,7 +177,14 @@ class VoiceSession:
                 for attempt in range(1, max_attempts + 1):
                     reconnect = False
                     try:
-                        return await channel.connect(reconnect=reconnect)
+                        try:
+                            return await channel.connect(
+                                reconnect=reconnect,
+                                self_deaf=False,
+                                self_mute=False,
+                            )
+                        except TypeError:
+                            return await channel.connect(reconnect=reconnect)
                     except discord.errors.ConnectionClosed as exc:
                         close_code = getattr(exc, "code", None)
                         if close_code == 4006:
@@ -177,7 +233,9 @@ class VoiceSession:
 
                 raise RuntimeError("Failed to connect to the voice channel")
 
-            return await _connect()
+            voice_client = await _connect()
+            await self._ensure_voice_reception(voice_client)
+            return voice_client
 
     async def leave(
         self,
