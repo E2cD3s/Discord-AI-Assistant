@@ -924,7 +924,11 @@ class DiscordAssistantBot(commands.Bot):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
-        await super().on_voice_state_update(member, before, after)
+        parent_handler = getattr(super(), "on_voice_state_update", None)
+        if parent_handler:
+            result = parent_handler(member, before, after)
+            if inspect.isawaitable(result):
+                await result
         for channel in (getattr(before, "channel", None), getattr(after, "channel", None)):
             self._update_voice_channel_population(channel)
 
