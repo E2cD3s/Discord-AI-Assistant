@@ -34,6 +34,9 @@ class WakeConversationState:
     start_time: float = 0.0
     inactivity_task: Optional[asyncio.Task[None]] = None
     max_duration_task: Optional[asyncio.Task[None]] = None
+    idle_disconnect_task: Optional[asyncio.Task[None]] = None
+    alone_disconnect_task: Optional[asyncio.Task[None]] = None
+    last_activity: float = field(default_factory=time.monotonic)
 
 
 class DiscordAssistantBot(commands.Bot):
@@ -198,6 +201,9 @@ class DiscordAssistantBot(commands.Bot):
                 return
 
             try:
+                channel = getattr(voice_client, "channel", None)
+                if channel is not None:
+                    self._mark_voice_activity(channel.id)
                 await self.voice_session.speak(voice_client, reply)
             except Exception:
                 _LOGGER.exception("Failed to play synthesized speech for voice ask")
@@ -282,6 +288,9 @@ class DiscordAssistantBot(commands.Bot):
                         ephemeral=True,
                     )
                     return
+            channel = getattr(voice_client, "channel", None)
+            if channel is not None:
+                self._mark_voice_activity(channel.id)
             await self.voice_session.speak(voice_client, text)
             await self._send_interaction_message(
                 interaction, "Playing synthesized speech."
@@ -387,6 +396,9 @@ class DiscordAssistantBot(commands.Bot):
             if not voice_client:
                 await ctx.send("I need to be in a voice channel to speak. Use the !join command first.")
                 return
+            channel = getattr(voice_client, "channel", None)
+            if channel is not None:
+                self._mark_voice_activity(channel.id)
             await self.voice_session.speak(voice_client, text)
             await ctx.send("Playing synthesized speech.")
 
@@ -548,13 +560,18 @@ class DiscordAssistantBot(commands.Bot):
         if state:
             state.voice_client = voice_client
             state.text_channel_id = text_channel_id
-            for task_attr in ("inactivity_task", "max_duration_task"):
+            for task_attr in (
+                "inactivity_task",
+                "max_duration_task",
+                "idle_disconnect_task",
+                "alone_disconnect_task",
+            ):
                 task = getattr(state, task_attr)
                 if task and not task.done():
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
-                    setattr(state, task_attr, None)
+                setattr(state, task_attr, None)
             state.transcripts.clear()
             state.active = False
             state.initiator_id = None
@@ -565,15 +582,149 @@ class DiscordAssistantBot(commands.Bot):
                 text_channel_id=text_channel_id,
             )
 
+        self._mark_voice_activity(channel_id)
+        channel = getattr(voice_client, "channel", None)
+        if channel is not None:
+            self._update_voice_channel_population(channel)
+
     async def _cleanup_voice_state(self, channel_id: int) -> None:
         state = self._voice_states.pop(channel_id, None)
         if not state:
             return
-        for task in (state.inactivity_task, state.max_duration_task):
+        for task in (
+            state.inactivity_task,
+            state.max_duration_task,
+            state.idle_disconnect_task,
+            state.alone_disconnect_task,
+        ):
             if task and not task.done():
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+
+    def _mark_voice_activity(self, channel_id: int) -> None:
+        state = self._voice_states.get(channel_id)
+        if not state:
+            return
+
+        state.last_activity = time.monotonic()
+        timeout = self.config_data.discord.voice_idle_timeout_seconds
+        if timeout <= 0:
+            return
+
+        task = state.idle_disconnect_task
+        if task and not task.done():
+            task.cancel()
+
+        state.idle_disconnect_task = asyncio.create_task(
+            self._disconnect_if_idle(channel_id, timeout)
+        )
+
+    def _schedule_alone_disconnect(self, channel_id: int) -> None:
+        state = self._voice_states.get(channel_id)
+        if not state:
+            return
+
+        timeout = self.config_data.discord.voice_alone_timeout_seconds
+        if timeout <= 0:
+            return
+
+        task = state.alone_disconnect_task
+        if task and not task.done():
+            task.cancel()
+
+        state.alone_disconnect_task = asyncio.create_task(
+            self._disconnect_if_alone(channel_id, timeout)
+        )
+
+    def _cancel_alone_timer(self, state: WakeConversationState) -> None:
+        task = state.alone_disconnect_task
+        if task and not task.done():
+            task.cancel()
+        state.alone_disconnect_task = None
+
+    def _has_other_members(self, channel: discord.abc.Connectable) -> bool:
+        members = getattr(channel, "members", None) or []
+        if len(members) <= 1:
+            return False
+
+        bot_id = getattr(self.user, "id", None)
+        for member in members:
+            if bot_id is None or getattr(member, "id", None) != bot_id:
+                return True
+        return False
+
+    def _update_voice_channel_population(
+        self, channel: Optional[discord.abc.Connectable]
+    ) -> None:
+        if channel is None:
+            return
+        channel_id = getattr(channel, "id", None)
+        if channel_id is None:
+            return
+
+        state = self._voice_states.get(channel_id)
+        if not state:
+            return
+
+        if self._has_other_members(channel):
+            self._cancel_alone_timer(state)
+        else:
+            self._schedule_alone_disconnect(channel_id)
+
+    async def _disconnect_if_idle(self, channel_id: int, timeout: float) -> None:
+        try:
+            while True:
+                state = self._voice_states.get(channel_id)
+                if not state:
+                    return
+                remaining = state.last_activity + timeout - time.monotonic()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
+            await self._disconnect_voice_client(channel_id, "extended inactivity")
+        except asyncio.CancelledError:
+            raise
+
+    async def _disconnect_if_alone(self, channel_id: int, timeout: float) -> None:
+        try:
+            await asyncio.sleep(timeout)
+            state = self._voice_states.get(channel_id)
+            if not state:
+                return
+            channel = getattr(state.voice_client, "channel", None)
+            if channel is None:
+                return
+            if not self._has_other_members(channel):
+                await self._disconnect_voice_client(channel_id, "being alone in the channel")
+        except asyncio.CancelledError:
+            raise
+
+    async def _disconnect_voice_client(self, channel_id: int, reason: str) -> None:
+        state = self._voice_states.get(channel_id)
+        voice_client = getattr(state, "voice_client", None)
+        if voice_client is None:
+            await self._cleanup_voice_state(channel_id)
+            return
+
+        channel = getattr(voice_client, "channel", None)
+        channel_name = getattr(channel, "name", channel_id)
+        _LOGGER.info(
+            "Disconnecting from voice channel %s (%s)", channel_name, reason
+        )
+
+        await self._send_voice_feedback(
+            state,
+            f"Disconnecting from voice channel due to {reason}.",
+        )
+
+        with suppress(Exception):
+            await self.voice_session.stop_listening(voice_client)
+
+        await self._cleanup_voice_state(channel_id)
+
+        with suppress(Exception):
+            await voice_client.disconnect()
 
     def _set_inactivity_timer(self, channel_id: int, delay: float = 2.0) -> None:
         state = self._voice_states.get(channel_id)
@@ -615,6 +766,7 @@ class DiscordAssistantBot(commands.Bot):
         if voice_client.is_playing() and self._is_voice_stop_request(transcript):
             if state:
                 state.voice_client = voice_client
+                self._mark_voice_activity(channel.id)
             stopped = False
             try:
                 stopped = self.voice_session.stop_speaking(voice_client)
@@ -635,6 +787,7 @@ class DiscordAssistantBot(commands.Bot):
             return
 
         state.voice_client = voice_client
+        self._mark_voice_activity(channel.id)
         _LOGGER.info("Transcribed from %s: %s", user, transcript)
 
         match = self._wake_word_regex.search(transcript)
@@ -704,6 +857,7 @@ class DiscordAssistantBot(commands.Bot):
             return
 
         state.active = False
+        self._mark_voice_activity(channel_id)
         current_task = asyncio.current_task()
 
         inactivity_task = state.inactivity_task
@@ -764,6 +918,16 @@ class DiscordAssistantBot(commands.Bot):
             self.status_rotator.start()
         await self._sync_application_commands()
 
+    async def on_voice_state_update(
+        self,
+        member: discord.Member | discord.User,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        await super().on_voice_state_update(member, before, after)
+        for channel in (getattr(before, "channel", None), getattr(after, "channel", None)):
+            self._update_voice_channel_population(channel)
+
     async def close(self) -> None:
         self.status_rotator.cancel()
         await super().close()
@@ -787,6 +951,9 @@ class DiscordAssistantBot(commands.Bot):
         await self._send_reply(message, reply)
         if message.guild and message.guild.voice_client:
             try:
+                channel = getattr(message.guild.voice_client, "channel", None)
+                if channel is not None:
+                    self._mark_voice_activity(channel.id)
                 await self.voice_session.speak(message.guild.voice_client, reply)
             except Exception:  # pragma: no cover - best effort
                 _LOGGER.exception("Failed to play synthesized speech")

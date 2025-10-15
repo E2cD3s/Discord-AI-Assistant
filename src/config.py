@@ -18,6 +18,8 @@ class DiscordConfig:
     wake_word: str
     wake_word_cooldown_seconds: int
     reply_in_thread: bool = True
+    voice_idle_timeout_seconds: int = 300
+    voice_alone_timeout_seconds: int = 60
 
 
 @dataclass
@@ -139,6 +141,12 @@ def load_config(path: Path | str) -> AppConfig:
             wake_word=wake_word.lower(),
             wake_word_cooldown_seconds=int(discord_cfg.get("wake_word_cooldown_seconds", 10)),
             reply_in_thread=bool(discord_cfg.get("reply_in_thread", True)),
+            voice_idle_timeout_seconds=max(
+                0, int(discord_cfg.get("voice_idle_timeout_seconds", 300))
+            ),
+            voice_alone_timeout_seconds=max(
+                0, int(discord_cfg.get("voice_alone_timeout_seconds", 60))
+            ),
         ),
         conversation=ConversationConfig(
             system_prompt=raw_config.get("conversation", {}).get("system_prompt", "You are an offline assistant."),
