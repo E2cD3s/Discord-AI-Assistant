@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, Sequence
 
 import yaml
 
@@ -79,10 +79,12 @@ class AppConfig:
     stt: STTConfig
     kokoro: KokoroConfig
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    _config_dir: str = field(init=False, repr=False, default="")
 
     @property
     def config_dir(self) -> Path:
-        return Path(self._config_dir)
+        config_dir = self._config_dir or "."
+        return Path(config_dir)
 
     def resolve_paths(self) -> None:
         stt_path = Path(self.stt.model_path)
@@ -98,12 +100,25 @@ class AppConfig:
                 self.logging.log_file = str(self.config_dir / log_file)
 
 
-def _validate_statuses(statuses: List[str]) -> None:
-    if not statuses:
-        raise ValueError("At least one status message must be configured")
-    for status in statuses:
-        if not status or not status.strip():
+def _validate_statuses(statuses: Any) -> List[str]:
+    if isinstance(statuses, str) or not isinstance(statuses, Sequence):
+        raise TypeError("discord.statuses must be a sequence of status strings")
+
+    normalized_statuses: List[str] = []
+    for index, status in enumerate(statuses):
+        if not isinstance(status, str):
+            raise TypeError(
+                f"discord.statuses entry at index {index} must be a string, got {type(status).__name__}"
+            )
+        cleaned = status.strip()
+        if not cleaned:
             raise ValueError("Status messages cannot be empty strings")
+        normalized_statuses.append(cleaned)
+
+    if not normalized_statuses:
+        raise ValueError("At least one status message must be configured")
+
+    return normalized_statuses
 
 
 def load_config(path: Path | str) -> AppConfig:
@@ -115,8 +130,7 @@ def load_config(path: Path | str) -> AppConfig:
         raw_config = yaml.safe_load(handle) or {}
 
     discord_cfg = raw_config.get("discord", {})
-    statuses = discord_cfg.get("statuses", [])
-    _validate_statuses(statuses)
+    statuses = _validate_statuses(discord_cfg.get("statuses", []))
 
     wake_word = str(discord_cfg.get("wake_word", "hey assistant")).strip()
     if not wake_word:
