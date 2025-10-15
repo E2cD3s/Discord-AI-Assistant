@@ -258,6 +258,8 @@ class VoiceSession:
         if voice_client.is_playing():
             voice_client.stop()
 
+        await self._ensure_voice_reception(voice_client)
+
         _LOGGER.info(
             "Starting voice capture in channel %s for up to %.1f seconds",
             voice_client.channel,
@@ -408,7 +410,30 @@ class VoiceSession:
         buffered_audio.sort(key=lambda item: item[0])
 
         if not buffered_audio:
-            _LOGGER.info("No audio detected during the last listening window")
+            voice_client = getattr(sink, "vc", None)
+            state_details: list[str] = []
+            if voice_client is not None:
+                if getattr(voice_client, "self_deaf", False):
+                    state_details.append("voice client is currently self-deafened")
+                if getattr(voice_client, "self_mute", False):
+                    state_details.append("voice client is currently self-muted")
+
+                guild = getattr(voice_client, "guild", None)
+                bot_member = getattr(guild, "me", None) if guild else None
+                voice_state = getattr(bot_member, "voice", None) if bot_member else None
+                if voice_state is not None:
+                    if getattr(voice_state, "self_deaf", False):
+                        state_details.append("bot member is server-deafened")
+                    if getattr(voice_state, "self_mute", False):
+                        state_details.append("bot member is server-muted")
+
+            if state_details:
+                _LOGGER.info(
+                    "No audio detected during the last listening window (%s)",
+                    "; ".join(state_details),
+                )
+            else:
+                _LOGGER.info("No audio detected during the last listening window")
             return
 
         for _, user, audio_bytes in buffered_audio:
