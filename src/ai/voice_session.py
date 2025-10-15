@@ -451,12 +451,26 @@ class VoiceSession:
         if voice_client.is_playing():
             voice_client.stop()
 
+        audio_source = discord.FFmpegPCMAudio(str(audio_path))
+
         def after_playback(error: Optional[Exception]) -> None:
             if error:
                 _LOGGER.error("FFmpeg playback error: %s", error)
-            audio_path.unlink(missing_ok=True)
 
-        audio_source = discord.FFmpegPCMAudio(str(audio_path))
+            try:
+                audio_source.cleanup()
+            except Exception:  # pragma: no cover - cleanup best effort
+                _LOGGER.exception("Failed to cleanup audio source for %s", audio_path)
+
+            try:
+                audio_path.unlink(missing_ok=True)
+            except PermissionError:
+                _LOGGER.warning(
+                    "Unable to remove synthesized audio file %s because it is still in use", audio_path
+                )
+            except Exception:  # pragma: no cover - cleanup best effort
+                _LOGGER.exception("Failed to remove synthesized audio file %s", audio_path)
+
         voice_client.play(audio_source, after=after_playback)
         return audio_path
 
