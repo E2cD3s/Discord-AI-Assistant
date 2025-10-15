@@ -13,6 +13,8 @@ discord:
   wake_word: "hey assistant"
   wake_word_cooldown_seconds: 10
   reply_in_thread: true
+  voice_idle_timeout_seconds: 300  # Disconnect after 5 minutes of no voice activity
+  voice_alone_timeout_seconds: 60  # Disconnect after 1 minute alone in a channel
 
 conversation:
   system_prompt: |
