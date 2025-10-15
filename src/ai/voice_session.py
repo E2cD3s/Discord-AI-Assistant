@@ -258,6 +258,8 @@ class VoiceSession:
         if voice_client.is_playing():
             voice_client.stop()
 
+        await self._ensure_voice_reception(voice_client)
+
         _LOGGER.info(
             "Starting voice capture in channel %s for up to %.1f seconds",
             voice_client.channel,
@@ -408,7 +410,30 @@ class VoiceSession:
         buffered_audio.sort(key=lambda item: item[0])
 
         if not buffered_audio:
-            _LOGGER.info("No audio detected during the last listening window")
+            voice_client = getattr(sink, "vc", None)
+            state_details: list[str] = []
+            if voice_client is not None:
+                if getattr(voice_client, "self_deaf", False):
+                    state_details.append("voice client is currently self-deafened")
+                if getattr(voice_client, "self_mute", False):
+                    state_details.append("voice client is currently self-muted")
+
+                guild = getattr(voice_client, "guild", None)
+                bot_member = getattr(guild, "me", None) if guild else None
+                voice_state = getattr(bot_member, "voice", None) if bot_member else None
+                if voice_state is not None:
+                    if getattr(voice_state, "self_deaf", False):
+                        state_details.append("bot member is server-deafened")
+                    if getattr(voice_state, "self_mute", False):
+                        state_details.append("bot member is server-muted")
+
+            if state_details:
+                _LOGGER.info(
+                    "No audio detected during the last listening window (%s)",
+                    "; ".join(state_details),
+                )
+            else:
+                _LOGGER.info("No audio detected during the last listening window")
             return
 
         for _, user, audio_bytes in buffered_audio:
@@ -426,12 +451,26 @@ class VoiceSession:
         if voice_client.is_playing():
             voice_client.stop()
 
+        audio_source = discord.FFmpegPCMAudio(str(audio_path))
+
         def after_playback(error: Optional[Exception]) -> None:
             if error:
                 _LOGGER.error("FFmpeg playback error: %s", error)
-            audio_path.unlink(missing_ok=True)
 
-        audio_source = discord.FFmpegPCMAudio(str(audio_path))
+            try:
+                audio_source.cleanup()
+            except Exception:  # pragma: no cover - cleanup best effort
+                _LOGGER.exception("Failed to cleanup audio source for %s", audio_path)
+
+            try:
+                audio_path.unlink(missing_ok=True)
+            except PermissionError:
+                _LOGGER.warning(
+                    "Unable to remove synthesized audio file %s because it is still in use", audio_path
+                )
+            except Exception:  # pragma: no cover - cleanup best effort
+                _LOGGER.exception("Failed to remove synthesized audio file %s", audio_path)
+
         voice_client.play(audio_source, after=after_playback)
         return audio_path
 
