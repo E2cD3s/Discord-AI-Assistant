@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import logging
+
 import discord
 import pytest
 
@@ -19,6 +21,159 @@ class _DummySocket:
 class _DummyVoiceClient:
     def __init__(self, channel: object) -> None:
         self.channel = channel
+
+
+def test_validate_voice_permissions_raises_when_connect_missing():
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    permissions = SimpleNamespace(view_channel=True, connect=False)
+    channel = SimpleNamespace(
+        guild=SimpleNamespace(me=SimpleNamespace()),
+        permissions_for=lambda _member: permissions,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        session._validate_voice_permissions(channel)
+
+    assert "Connect" in str(excinfo.value)
+
+
+def test_validate_voice_permissions_warns_for_voice_activity(caplog):
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    permissions = SimpleNamespace(
+        view_channel=True,
+        connect=True,
+        speak=True,
+        use_voice_activation=False,
+    )
+    channel = SimpleNamespace(
+        guild=SimpleNamespace(me=SimpleNamespace()),
+        permissions_for=lambda _member: permissions,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        session._validate_voice_permissions(channel)
+
+    assert "Use Voice Activity" in caplog.text
+
+
+def test_wait_until_voice_ready_completes_when_gateway_recovers():
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    udp_client = SimpleNamespace(connected=False)
+    ws = SimpleNamespace(connected=False, udp=udp_client)
+
+    voice_client = SimpleNamespace(ws=ws, channel="test-channel")
+    voice_client.is_connected = lambda: True  # type: ignore[attr-defined]
+
+    async def _mark_ready():
+        await asyncio.sleep(0.05)
+        ws.connected = True
+        udp_client.connected = True
+
+    _EVENT_LOOP.create_task(_mark_ready())
+
+    _EVENT_LOOP.run_until_complete(session._wait_until_voice_ready(voice_client, timeout=0.5))
+
+
+def test_wait_until_voice_ready_times_out():
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    voice_client = SimpleNamespace(
+        ws=SimpleNamespace(connected=False, udp=SimpleNamespace(connected=False)),
+        channel="timeout-channel",
+    )
+    voice_client.is_connected = lambda: True  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _EVENT_LOOP.run_until_complete(session._wait_until_voice_ready(voice_client, timeout=0.2))
+
+    assert "did not become ready" in str(excinfo.value)
+
+
+def test_wait_for_playback_to_finish_allows_existing_audio():
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    state = {"playing": True}
+    stop_called = False
+
+    def stop():
+        nonlocal stop_called
+        stop_called = True
+
+    voice_client = SimpleNamespace(
+        channel="test-channel",
+        is_playing=lambda: state["playing"],
+        stop=stop,
+    )
+
+    async def _finish_playback():
+        await asyncio.sleep(0.05)
+        state["playing"] = False
+
+    _EVENT_LOOP.create_task(_finish_playback())
+
+    _EVENT_LOOP.run_until_complete(
+        session._wait_for_playback_to_finish(voice_client, timeout=0.5)
+    )
+
+    assert not stop_called
+
+
+def test_wait_for_playback_to_finish_times_out_and_stops(caplog):
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    state = {"playing": True}
+    stop_called = False
+
+    def stop():
+        nonlocal stop_called
+        stop_called = True
+        state["playing"] = False
+
+    voice_client = SimpleNamespace(
+        channel="timeout-channel",
+        is_playing=lambda: state["playing"],
+        stop=stop,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        _EVENT_LOOP.run_until_complete(
+            session._wait_for_playback_to_finish(voice_client, timeout=0.1)
+        )
+
+    assert stop_called
+    assert "Timed out waiting for playback" in caplog.text
+
+
+def test_diagnose_channel_silence_warns_when_all_members_muted(caplog):
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    voice_state = SimpleNamespace(
+        self_mute=True,
+        mute=False,
+        self_deaf=False,
+        deaf=False,
+        suppressed=False,
+    )
+    member = SimpleNamespace(
+        id=123,
+        name="Listener",
+        bot=False,
+        voice=voice_state,
+    )
+    channel = SimpleNamespace(
+        members=[member],
+        guild=SimpleNamespace(me=SimpleNamespace(id=999)),
+    )
+    voice_client = SimpleNamespace(channel=channel)
+
+    with caplog.at_level(logging.INFO):
+        session._diagnose_channel_silence(voice_client)
+
+    assert "Listener" in caplog.text
+    assert "All non-bot members" in caplog.text
 
 
 def test_join_retries_with_fresh_voice_session_when_invalidated(monkeypatch):
@@ -80,6 +235,73 @@ def test_join_raises_helpful_error_when_voice_gateway_closes(monkeypatch):
         _EVENT_LOOP.run_until_complete(session.join(ctx))
 
     assert "close code 4014" in str(excinfo.value)
+
+
+def test_listen_once_waits_for_playback_before_recording(monkeypatch):
+    session = VoiceSession(SimpleNamespace(), SimpleNamespace())
+
+    channel = SimpleNamespace(id=123)
+    guild = SimpleNamespace(id=456)
+
+    state = {"playing": True}
+    stop_called = False
+    start_states: list[bool] = []
+    stop_recording_called = False
+
+    def stop():
+        nonlocal stop_called
+        stop_called = True
+
+    def is_playing():
+        return state["playing"]
+
+    def start_recording(_sink, after):
+        start_states.append(state["playing"])
+        after(SimpleNamespace(audio_data={}, cleanup=lambda: None, vc=voice_client))
+
+    def stop_recording():
+        nonlocal stop_recording_called
+        stop_recording_called = True
+
+    async def fake_handle_sink(_sink, _cb):
+        return None
+
+    async def on_transcription(*_args):
+        return None
+
+    voice_client = SimpleNamespace(
+        channel=channel,
+        guild=guild,
+        ws=SimpleNamespace(connected=True, udp=SimpleNamespace(connected=True)),
+        is_playing=is_playing,
+        stop=stop,
+        start_recording=start_recording,
+        stop_recording=stop_recording,
+    )
+    voice_client.is_connected = lambda: True  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(session, "_create_wave_sink", lambda: SimpleNamespace())
+    monkeypatch.setattr(session, "_handle_sink", fake_handle_sink)
+    monkeypatch.setattr(
+        discord,
+        "opus",
+        SimpleNamespace(is_loaded=lambda: True),
+        raising=False,
+    )
+
+    async def _finish_playback():
+        await asyncio.sleep(0.05)
+        state["playing"] = False
+
+    _EVENT_LOOP.create_task(_finish_playback())
+
+    _EVENT_LOOP.run_until_complete(
+        session.listen_once(voice_client, on_transcription, timeout=0.2)
+    )
+
+    assert start_states == [False]
+    assert not stop_called
+    assert stop_recording_called
 
 
 def test_join_raises_after_reconnect_attempts_when_close_code_4006_persists(monkeypatch):
