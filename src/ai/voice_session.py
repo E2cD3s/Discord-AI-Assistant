@@ -763,7 +763,17 @@ class VoiceSession:
         encoder = getattr(voice_client, "encoder", None)
         bitrate = getattr(channel, "bitrate", None) if channel is not None else None
 
-        if encoder is None or not isinstance(bitrate, int) or bitrate <= 0:
+        if encoder is None:
+            return
+
+        if not hasattr(encoder, "set_bitrate"):
+            _LOGGER.debug(
+                "Voice encoder for channel %s does not support bitrate configuration; skipping.",
+                channel,
+            )
+            return
+
+        if not isinstance(bitrate, int) or bitrate <= 0:
             return
 
         minimum_bitrate = 16000
