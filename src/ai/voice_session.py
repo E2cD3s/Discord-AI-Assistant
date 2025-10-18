@@ -6,8 +6,9 @@ import inspect
 import wave
 from contextlib import closing, suppress
 from io import BytesIO
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import discord
 from discord.ext import commands
@@ -19,10 +20,72 @@ try:  # pragma: no cover - optional dependency resolution
 except (ImportError, AttributeError):  # pragma: no cover - handled at runtime
     discord_sinks = None
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from discord.sinks import Sink as DiscordSink
-else:
-    DiscordSink = Any
+try:  # pragma: no cover - optional dependency resolution
+    from discord.ext.voice_recv import VoiceRecvClient as DiscordVoiceRecvClient
+    from discord.ext.voice_recv import sinks as voice_recv_sinks
+except (ImportError, AttributeError):  # pragma: no cover - handled at runtime
+    DiscordVoiceRecvClient = None  # type: ignore[assignment]
+    voice_recv_sinks = None  # type: ignore[assignment]
+
+if voice_recv_sinks is not None:  # pragma: no cover - exercised via integration tests
+
+    class _VoiceRecvBufferSink(voice_recv_sinks.AudioSink):
+        """Collect PCM frames per user and expose them as WAV byte streams."""
+
+        _CHANNELS = voice_recv_sinks.WaveSink.CHANNELS
+        _SAMPLE_WIDTH = voice_recv_sinks.WaveSink.SAMPLE_WIDTH
+        _SAMPLE_RATE = voice_recv_sinks.WaveSink.SAMPLING_RATE
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._buffers: Dict[int, tuple[Any, BytesIO]] = {}
+            self._start_times: Dict[int, float] = {}
+
+        def wants_opus(self) -> bool:
+            return False
+
+        def write(self, user: Any | None, data: Any) -> None:
+            if user is None:
+                return
+
+            user_id = getattr(user, "id", None)
+            if user_id is None:
+                return
+
+            entry = self._buffers.get(user_id)
+            if entry is None:
+                buffer = BytesIO()
+                self._buffers[user_id] = (user, buffer)
+                self._start_times[user_id] = time.monotonic()
+            else:
+                _, buffer = entry
+
+            pcm_data = getattr(data, "pcm", b"") or b""
+            if pcm_data:
+                buffer.write(pcm_data)
+
+        def iter_audio(self) -> list[tuple[float, Any, bytes]]:
+            audio_payloads: list[tuple[float, Any, bytes]] = []
+            for user_id, (user, buffer) in self._buffers.items():
+                pcm_bytes = buffer.getvalue()
+                if not pcm_bytes:
+                    continue
+
+                start_time = self._start_times.get(user_id, 0.0)
+                wav_stream = BytesIO()
+                with closing(wave.open(wav_stream, "wb")) as wav_out:
+                    wav_out.setnchannels(self._CHANNELS)
+                    wav_out.setsampwidth(self._SAMPLE_WIDTH)
+                    wav_out.setframerate(self._SAMPLE_RATE)
+                    wav_out.writeframes(pcm_bytes)
+                wav_stream.seek(0)
+                audio_payloads.append((start_time, user, wav_stream.getvalue()))
+
+            return audio_payloads
+
+        def cleanup(self) -> None:
+            self._buffers.clear()
+            self._start_times.clear()
 
 from ..logging_utils import get_logger
 from .stt import SpeechToText
@@ -206,11 +269,14 @@ class VoiceSession:
                     reconnect = False
                     try:
                         try:
-                            return await channel.connect(
+                            connect_kwargs = dict(
                                 reconnect=reconnect,
                                 self_deaf=False,
                                 self_mute=False,
                             )
+                            if DiscordVoiceRecvClient is not None:
+                                connect_kwargs["cls"] = DiscordVoiceRecvClient
+                            return await channel.connect(**connect_kwargs)
                         except TypeError:
                             return await channel.connect(reconnect=reconnect)
                     except discord.errors.ConnectionClosed as exc:
@@ -316,23 +382,68 @@ class VoiceSession:
         await self._wait_until_voice_ready(voice_client)
 
         wave_sink = self._create_wave_sink()
+        recording_event = asyncio.Event()
+        recording_started = False
+        stop_callable: Callable[[], Any] | None = None
 
-        def after_recording(completed_sink: DiscordSink, *_) -> None:
-            task = asyncio.create_task(self._handle_sink(completed_sink, on_transcription))
-            self._active_recordings[self._voice_key(voice_client)] = task
+        def _schedule_processing(completed_sink: Any, *, error: Exception | None = None) -> None:
+            try:
+                if error is None:
+                    task = asyncio.create_task(
+                        self._handle_sink(completed_sink, on_transcription)
+                    )
+                else:
+                    task = asyncio.create_task(
+                        self._handle_sink(completed_sink, on_transcription, error=error)
+                    )
+                self._active_recordings[self._voice_key(voice_client)] = task
+            finally:
+                recording_event.set()
 
-        start_recording = getattr(voice_client, "start_recording", None)
-        if not callable(start_recording):
-            raise RuntimeError(
-                "The active voice client does not expose recording support. "
-                "Install or upgrade to 'discord.py[voice]>=2.3.2' (or an equivalent fork with sinks support)."
-            )
+        use_voice_recv = (
+            voice_recv_sinks is not None
+            and isinstance(wave_sink, _VoiceRecvBufferSink)
+            and callable(getattr(voice_client, "listen", None))
+        )
 
-        try:
-            start_recording(wave_sink, after_recording)
-        except Exception:
-            _LOGGER.exception("Failed to start voice recording in channel %s", voice_client.channel)
-            raise
+        if use_voice_recv:
+            listen = getattr(voice_client, "listen", None)
+            stop_callable = getattr(voice_client, "stop_listening", None)
+            if not callable(listen):
+                raise RuntimeError(
+                    "The active voice client does not support audio reception. Install 'discord-ext-voice-recv' "
+                    "and ensure the bot connects with VoiceRecvClient."
+                )
+
+            def _after_listen(exc: Exception | None = None) -> None:
+                _schedule_processing(wave_sink, error=exc)
+
+            try:
+                listen(wave_sink, after=_after_listen)
+            except Exception:
+                _LOGGER.exception("Failed to start voice capture in channel %s", voice_client.channel)
+                raise
+            else:
+                recording_started = True
+        else:
+            start_recording = getattr(voice_client, "start_recording", None)
+            if not callable(start_recording):
+                raise RuntimeError(
+                    "The active voice client does not expose recording support. Install or upgrade to a Discord library "
+                    "with voice sinks (e.g. 'discord-ext-voice-recv')."
+                )
+
+            def _after_recording(completed_sink: Any, *_: Any) -> None:
+                _schedule_processing(completed_sink)
+
+            try:
+                start_recording(wave_sink, _after_recording)
+            except Exception:
+                _LOGGER.exception("Failed to start voice recording in channel %s", voice_client.channel)
+                raise
+            else:
+                recording_started = True
+                stop_callable = getattr(voice_client, "stop_recording", None)
 
         try:
             await asyncio.sleep(timeout)
@@ -340,15 +451,28 @@ class VoiceSession:
             _LOGGER.info("Voice capture in %s cancelled", voice_client.channel)
             raise
         finally:
-            stop_recording = getattr(voice_client, "stop_recording", None)
-            if callable(stop_recording):
-                stop_recording()
-            else:
+            if callable(stop_callable):
+                try:
+                    stop_callable()
+                except Exception:
+                    _LOGGER.exception(
+                        "Failed to stop voice capture in channel %s", voice_client.channel
+                    )
+            elif stop_callable is not None:
                 _LOGGER.warning(
-                    "Voice client for channel %s does not implement stop_recording(); "
-                    "audio capture may continue until the client disconnects.",
+                    "Voice client for channel %s does not implement a stop method for audio capture; "
+                    "audio may continue until the client disconnects.",
                     voice_client.channel,
                 )
+
+            if recording_started:
+                try:
+                    await asyncio.wait_for(recording_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    _LOGGER.warning(
+                        "Timed out waiting for audio capture to finalize in channel %s", voice_client.channel
+                    )
+
             task = self._active_recordings.pop(self._voice_key(voice_client), None)
             if task:
                 await task
@@ -395,16 +519,21 @@ class VoiceSession:
         except asyncio.CancelledError:
             pass
 
-    def _create_wave_sink(self) -> DiscordSink:
+    def _create_wave_sink(self) -> Any:
+        if voice_recv_sinks is not None:
+            return _VoiceRecvBufferSink()
+
         if discord_sinks is None:
             raise RuntimeError(
-                "The installed Discord library does not expose voice sinks. "
-                "Install 'discord.py[voice]>=2.3.2' to enable voice recording support."
+                "Voice recording support is unavailable. Install 'discord-ext-voice-recv' "
+                "or a Discord library that bundles discord.sinks to enable audio capture."
             )
+
         wave_sink = getattr(discord_sinks, "WaveSink", None)
         if wave_sink is None:
             raise RuntimeError(
-                "discord.sinks.WaveSink is unavailable. Update to a newer version of discord.py to continue."
+                "discord.sinks.WaveSink is unavailable. Update your Discord library or install "
+                "'discord-ext-voice-recv' to continue."
             )
         return wave_sink()
 
@@ -547,8 +676,16 @@ class VoiceSession:
 
             await asyncio.sleep(0.1)
 
-    async def _handle_sink(self, sink: DiscordSink, on_transcription: TranscriptionCallback) -> None:
+    async def _handle_sink(
+        self,
+        sink: Any,
+        on_transcription: TranscriptionCallback,
+        *,
+        error: Exception | None = None,
+    ) -> None:
         try:
+            if error is not None:
+                _LOGGER.error("Voice receive session ended with an error: %s", error)
             await self._process_sink(sink, on_transcription)
         finally:
             sink.cleanup()
@@ -616,46 +753,52 @@ class VoiceSession:
                 channel,
             )
 
-    async def _process_sink(self, sink: DiscordSink, on_transcription: TranscriptionCallback) -> None:
-        buffered_audio = []
-        for user, audio in sink.audio_data.items():
-            if audio is None or audio.file is None:
-                continue
+    async def _process_sink(self, sink: Any, on_transcription: TranscriptionCallback) -> None:
+        buffered_audio: list[tuple[float, Any, bytes]] = []
 
-            start_time = getattr(audio, "start_time", 0.0)
-            audio_file = audio.file
-            audio_bytes: bytes | None = None
+        if voice_recv_sinks is not None and isinstance(sink, _VoiceRecvBufferSink):
+            buffered_audio.extend(sink.iter_audio())
+        else:
+            audio_items = getattr(getattr(sink, "audio_data", None), "items", None)
+            if callable(audio_items):
+                for user, audio in audio_items():
+                    if audio is None or getattr(audio, "file", None) is None:
+                        continue
 
-            if hasattr(audio_file, "getvalue"):
-                try:
-                    audio_bytes = audio_file.getvalue()
-                except Exception:  # pragma: no cover - defensive guard
-                    _LOGGER.exception(
-                        "Failed to read buffered audio via getvalue() for user %s", user
-                    )
-                    audio_bytes = None
+                    start_time = getattr(audio, "start_time", 0.0)
+                    audio_file = audio.file
+                    audio_bytes: bytes | None = None
 
-            if audio_bytes is None:
-                try:
-                    if hasattr(audio_file, "seek"):
-                        audio_file.seek(0)
-                    audio_bytes = audio_file.read()
-                except Exception:  # pragma: no cover - defensive guard
-                    _LOGGER.exception(
-                        "Failed to read buffered audio via read() for user %s", user
-                    )
-                    audio_bytes = None
+                    if hasattr(audio_file, "getvalue"):
+                        try:
+                            audio_bytes = audio_file.getvalue()
+                        except Exception:  # pragma: no cover - defensive guard
+                            _LOGGER.exception(
+                                "Failed to read buffered audio via getvalue() for user %s", user
+                            )
+                            audio_bytes = None
 
-            if not audio_bytes:
-                _LOGGER.debug("Ignoring empty audio buffer for user %s", user)
-                continue
+                    if audio_bytes is None:
+                        try:
+                            if hasattr(audio_file, "seek"):
+                                audio_file.seek(0)
+                            audio_bytes = audio_file.read()
+                        except Exception:  # pragma: no cover - defensive guard
+                            _LOGGER.exception(
+                                "Failed to read buffered audio via read() for user %s", user
+                            )
+                            audio_bytes = None
 
-            buffered_audio.append((start_time, user, audio_bytes))
+                    if not audio_bytes:
+                        _LOGGER.debug("Ignoring empty audio buffer for user %s", user)
+                        continue
+
+                    buffered_audio.append((start_time, user, audio_bytes))
 
         buffered_audio.sort(key=lambda item: item[0])
 
         if not buffered_audio:
-            voice_client = getattr(sink, "vc", None)
+            voice_client = getattr(sink, "vc", None) or getattr(sink, "voice_client", None)
             state_details: list[str] = []
             if voice_client is not None:
                 if getattr(voice_client, "self_deaf", False):

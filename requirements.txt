@@ -2,6 +2,7 @@ aiohttp>=3.9.0
 PyYAML>=6.0
 pydantic>=2.5
 discord.py[voice]>=2.3.2
+discord-ext-voice-recv>=0.5.2a
 faster-whisper>=0.10.0
 kokoro>=0.6.0
 numpy>=1.23
