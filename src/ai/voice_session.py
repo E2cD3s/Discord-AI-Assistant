@@ -385,19 +385,32 @@ class VoiceSession:
         recording_event = asyncio.Event()
         recording_started = False
         stop_callable: Callable[[], Any] | None = None
+        voice_key = self._voice_key(voice_client)
+        loop = asyncio.get_running_loop()
 
         def _schedule_processing(completed_sink: Any, *, error: Exception | None = None) -> None:
+            def _dispatch() -> None:
+                try:
+                    if error is None:
+                        task = loop.create_task(
+                            self._handle_sink(completed_sink, on_transcription)
+                        )
+                    else:
+                        task = loop.create_task(
+                            self._handle_sink(
+                                completed_sink, on_transcription, error=error
+                            )
+                        )
+                    self._active_recordings[voice_key] = task
+                finally:
+                    recording_event.set()
+
             try:
-                if error is None:
-                    task = asyncio.create_task(
-                        self._handle_sink(completed_sink, on_transcription)
-                    )
-                else:
-                    task = asyncio.create_task(
-                        self._handle_sink(completed_sink, on_transcription, error=error)
-                    )
-                self._active_recordings[self._voice_key(voice_client)] = task
-            finally:
+                loop.call_soon_threadsafe(_dispatch)
+            except RuntimeError:
+                _LOGGER.exception(
+                    "Failed to dispatch audio processing task for channel %s", voice_client.channel
+                )
                 recording_event.set()
 
         use_voice_recv = (
